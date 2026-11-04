@@ -15,6 +15,7 @@ Docs: https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -25,9 +26,13 @@ from typing import Any
 import requests
 
 from gim.config import Settings, get_settings
-from gim.models import Article
+from gim.models import Article, Document
+from gim.pipeline.attribution import classify_reporting
+from gim.pipeline.geo import tag_places
+from gim.sources.base import Connector, FetchResult, FetchState
 from gim.pipeline.classify import classify_title
 from gim.pipeline.normalize import canonicalize_url, clean_text, is_safe_url, title_fingerprint
+from gim.regions import REGIONS, build_query
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +101,10 @@ class GdeltClient:
     # -- public API --------------------------------------------------------
     def search_articles(self, query: str, timespan: str = "24h", max_records: int = MAX_RECORDS) -> list[Article]:
         """Return articles matching ``query`` seen within ``timespan`` (e.g. 24h, 7d, 2w)."""
+        return parse_artlist(self.fetch_artlist_json(query, timespan, max_records))
+
+    def fetch_artlist_json(self, query: str, timespan: str = "24h", max_records: int = MAX_RECORDS) -> dict[str, Any]:
+        """Raw GDELT JSON (kept for fixture recording and provenance)."""
         if not _TIMESPAN_RE.match(timespan):
             raise ValueError(f"Invalid timespan {timespan!r}; use e.g. 30min, 24h, 7d, 2w, 1m")
         params = {
@@ -107,8 +116,7 @@ class GdeltClient:
             "sort": "DateDesc",
         }
         log.info("Querying GDELT", extra={"query": query, "timespan": timespan})
-        data = self._get_json(params)
-        return parse_artlist(data)
+        return self._get_json(params)
 
 
 def parse_seendate(value: str) -> datetime | None:
@@ -156,3 +164,59 @@ def parse_artlist(data: dict[str, Any]) -> list[Article]:
     if skipped:
         log.warning("Skipped %d malformed GDELT records", skipped)
     return articles
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: GDELT as a registry connector
+# ---------------------------------------------------------------------------
+
+
+def article_to_document(a: Article, region: str, query: str) -> Document:
+    """Map a GDELT article to the general Document model.
+
+    GDELT gives a headline and the outlet domain only, so original-vs-syndicated
+    can be detected only when the headline itself carries an agency marker or
+    the outlet is an agency.
+    """
+    doc_type, reporter = classify_reporting(a.domain, a.title, "unknown")
+    countries, regions = tag_places(a.title)
+    return Document(
+        source_id="gdelt", url=a.url, canonical_url=a.canonical_url, title=a.title,
+        publisher=a.domain, source_category="news_discovery", doc_type=doc_type,
+        language=a.language, published_at=a.seen_at, original_reporter=reporter,
+        source_country=a.source_country, countries=countries,
+        regions=sorted(set(regions) | {region}), categories=a.categories,
+        title_fingerprint=a.title_fingerprint,
+        provenance={"connector": "gdelt", "gdelt_query": query, "gdelt_region": region,
+                    "published_at_is": "gdelt_seendate"},
+    )
+
+
+class GdeltConnector(Connector):
+    """Runs one GDELT query per monitored region (see gim.regions)."""
+
+    timespan = "24h"
+
+    def __init__(self, spec, http, client: GdeltClient | None = None, regions: list[str] | None = None):
+        super().__init__(spec, http)
+        self.client = client or GdeltClient()
+        self.region_keys = regions
+
+    def fetch(self, state: FetchState) -> FetchResult:
+        settings = get_settings()
+        result = FetchResult()
+        failures = []
+        keys = self.region_keys or list(REGIONS)
+        for key in keys:
+            query = build_query(REGIONS[key], language=settings.gdelt_language)
+            try:
+                data = self.client.fetch_artlist_json(query, self.timespan)
+            except GdeltError as exc:
+                failures.append(f"{key}: {exc}")
+                continue
+            result.raw.append((f"artlist_{key}.json", json.dumps(data).encode("utf-8")))
+            result.documents.extend(article_to_document(a, key, query) for a in parse_artlist(data))
+        if failures and len(failures) == len(keys):
+            raise GdeltError("; ".join(failures))
+        result.notes.extend(failures)
+        return result

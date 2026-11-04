@@ -1,4 +1,8 @@
-"""Collection run: query GDELT for each region and store the results.
+"""Phase 1 GDELT-only collection run (kept for compatibility).
+
+PREFER ``python -m gim.collect`` (Phase 2): it runs every registry source,
+including GDELT, and updates the Source health page. This module does not
+update source health.
 
 Usage (from the project root, with the virtual environment active):
 

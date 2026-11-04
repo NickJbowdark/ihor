@@ -1,0 +1,43 @@
+{
+  "_comment": "SYNTHETIC FIXTURE: hand-written imitation of a ReliefWeb API v2 /reports response. Not real ReliefWeb content.",
+  "time": 12,
+  "href": "https://api.reliefweb.int/v2/reports",
+  "totalCount": 2,
+  "count": 3,
+  "data": [
+    {
+      "id": "9000001",
+      "score": 1,
+      "fields": {
+        "title": "[TEST FIXTURE] Sudan: Humanitarian Situation Report No. 99",
+        "url_alias": "https://reliefweb.int/report/sudan/fixture-situation-report-99",
+        "url": "https://reliefweb.int/node/9000001",
+        "date": {"created": "2026-11-04T06:00:00+00:00", "original": "2026-11-03T00:00:00+00:00", "changed": "2026-11-04T07:00:00+00:00"},
+        "source": [{"name": "UN Office for the Coordination of Humanitarian Affairs", "shortname": "OCHA"}],
+        "country": [{"name": "Sudan", "iso3": "sdn"}, {"name": "Chad", "iso3": "tcd"}],
+        "primary_country": {"name": "Sudan", "iso3": "sdn"},
+        "language": [{"code": "en", "name": "English"}],
+        "format": [{"name": "Situation Report"}],
+        "body": "Synthetic body text. Displacement continues; **refugees** cross into Chad."
+      }
+    },
+    {
+      "id": "9000002",
+      "score": 1,
+      "fields": {
+        "title": "[TEST FIXTURE] Food security analysis for the Sahel",
+        "url_alias": "https://reliefweb.int/report/mali/fixture-food-security-analysis",
+        "date": {"created": "2026-11-03T09:00:00+00:00", "original": "2026-11-02T00:00:00+00:00"},
+        "source": [{"name": "World Food Programme", "shortname": "WFP"}, {"name": "Food and Agriculture Organization of the United Nations", "shortname": "FAO"}],
+        "country": [{"name": "Mali"}, {"name": "Niger"}, {"name": "Burkina Faso"}],
+        "language": [{"code": "en"}],
+        "format": [{"name": "Analysis"}],
+        "body": "Synthetic analysis text."
+      }
+    },
+    {
+      "id": "9000003",
+      "fields": {"title": "", "url_alias": "https://reliefweb.int/report/x"}
+    }
+  ]
+}

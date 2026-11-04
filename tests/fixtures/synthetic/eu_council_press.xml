@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE: hand-written imitation of an RSS 2.0 feed. Not real Council content. -->
+<rss version="2.0">
+  <channel>
+    <title>Council of the EU - Press releases</title>
+    <link>https://www.consilium.europa.eu/en/press/press-releases/</link>
+    <description>Synthetic test feed</description>
+    <item>
+      <title>[TEST FIXTURE] Russia: Council adopts new package of restrictive measures</title>
+      <link>https://www.consilium.europa.eu/en/press/press-releases/2026/11/03/fixture-sanctions/</link>
+      <description>Synthetic summary: the Council adopted sanctions in view of Russia's war against Ukraine.</description>
+      <pubDate>Tue, 03 Nov 2026 16:00:00 GMT</pubDate>
+      <guid>https://www.consilium.europa.eu/en/press/press-releases/2026/11/03/fixture-sanctions/</guid>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Council conclusions on the Sahel</title>
+      <link>https://www.consilium.europa.eu/en/press/press-releases/2026/11/04/fixture-sahel/</link>
+      <description>Synthetic summary on Mali, Burkina Faso and Niger.</description>
+      <pubDate>Wed, 04 Nov 2026 11:15:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Agriculture and Fisheries Council, main results</title>
+      <link>https://www.consilium.europa.eu/en/meetings/agrifish/2026/11/04/</link>
+      <description>Synthetic summary without foreign-policy content.</description>
+      <pubDate>Wed, 04 Nov 2026 18:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

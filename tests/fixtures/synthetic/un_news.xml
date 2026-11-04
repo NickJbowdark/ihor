@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE: hand-written imitation of an RSS 2.0 feed. Not real UN content. -->
+<rss version="2.0">
+  <channel>
+    <title>UN News - Global perspective Human stories</title>
+    <link>https://news.un.org/en/</link>
+    <description>Synthetic test feed</description>
+    <language>en</language>
+    <item>
+      <title>[TEST FIXTURE] Security Council discusses humanitarian access in Sudan</title>
+      <link>https://news.un.org/en/story/2026/11/0000001</link>
+      <description>&lt;p&gt;Synthetic summary: members of the &lt;b&gt;Security Council&lt;/b&gt; heard a briefing on aid access in Darfur.&lt;/p&gt;</description>
+      <pubDate>Tue, 03 Nov 2026 14:30:00 +0000</pubDate>
+      <guid isPermaLink="false">fixture-un-1</guid>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Secretary-General calls for de-escalation in the Taiwan Strait</title>
+      <link>https://news.un.org/en/story/2026/11/0000002?utm_source=rss</link>
+      <description>Synthetic summary mentioning China and Taiwan.</description>
+      <pubDate>Wed, 04 Nov 2026 09:00:00 +0000</pubDate>
+      <guid isPermaLink="false">fixture-un-2</guid>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Global food prices report published</title>
+      <link>https://news.un.org/en/story/2026/11/0000003</link>
+      <description>Synthetic item without a publication date and without any country name.</description>
+      <guid isPermaLink="false">fixture-un-3</guid>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Malicious entry</title>
+      <link>javascript:alert('x')</link>
+      <description>Must be dropped: unsafe link scheme.</description>
+      <pubDate>Wed, 04 Nov 2026 10:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

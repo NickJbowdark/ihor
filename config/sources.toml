@@ -1,0 +1,701 @@
+# GIM SOURCE REGISTRY -- the single place where every source is described.
+#
+# This is your *collection plan*. Each [[source]] says WHAT the source is, WHO
+# publishes it, HOW we may access it, and HOW OFTEN. Operational state (last
+# success, last error, status) is NOT stored here: it lives in the database
+# table `source_status` and is shown on the dashboard's "Source health" page.
+#
+# Fields
+#   id            short unique key (letters, digits, underscore)
+#   name          display name
+#   organization  publishing organisation
+#   category      news_discovery | international_media | official_eu | official_un |
+#                 official_nato | official_national | conflict_dataset | humanitarian |
+#                 economic | sanctions | geospatial
+#   doc_type      default type of documents from this source:
+#                 original_reporting | syndicated | official_statement | dataset_record |
+#                 analysis_opinion | unknown
+#   connector     gdelt | rss | reliefweb | planned   (planned = catalogued, no code yet)
+#   url           feed / API endpoint actually requested
+#   homepage      human-readable site
+#   coverage      geographic coverage (free text)
+#   languages     ISO 639-1 codes
+#   default_regions  regions assigned when no place name is recognised in a document
+#   auth          none | appname | token | oauth
+#   auth_env      names of .env variables holding credentials (never the secrets themselves)
+#   licence       licence / terms summary  (OUR READING -- always check the source's own terms)
+#   usage_notes   access etiquette and analytical caveats
+#   poll_minutes  minimum minutes between collection runs
+#   enabled       collect automatically?
+#   verified      has a real response been fetched & parsed successfully at least once?
+#                 (false = endpoint taken from documentation, not yet tested)
+#
+# NOTE: there is deliberately NO "reliability score" field. Reliability is assessed
+# per claim / per event (evidence, independence, attribution), not per organisation.
+
+# ---------------------------------------------------------------------------
+# PRIORITY 1 -- discovery
+# ---------------------------------------------------------------------------
+[[source]]
+id = "gdelt"
+name = "GDELT DOC 2.0 (article search)"
+organization = "The GDELT Project"
+category = "news_discovery"
+doc_type = "unknown"     # GDELT cannot tell original from syndicated reporting
+connector = "gdelt"
+url = "https://api.gdeltproject.org/api/v2/doc/doc"
+homepage = "https://www.gdeltproject.org/"
+coverage = "Global, ~65 languages (machine-translated search)"
+languages = ["multi"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Free; metadata may be used with attribution to GDELT. Linked articles remain the publishers' copyright."
+usage_notes = "Discovery only, NOT verification. Max ~1 request / 5 s. Rolling ~3-month window. sourcecountry = outlet country, not event location."
+poll_minutes = 180
+enabled = true
+verified = false   # verified on your Windows PC with: python -m gim.collect --source gdelt --dry-run
+
+# ---------------------------------------------------------------------------
+# PRIORITY 2 -- official / primary sources (implemented first)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "un_news"
+name = "UN News - all news"
+organization = "United Nations (Department of Global Communications)"
+category = "official_un"
+doc_type = "official_statement"   # institutional communication by the UN Secretariat
+connector = "rss"
+url = "https://news.un.org/feed/subscribe/en/news/all/rss.xml"
+homepage = "https://news.un.org/"
+coverage = "Global"
+languages = ["en"]
+default_regions = ["global"]
+auth = "none"
+auth_env = []
+licence = "UN website terms of use; reproduce with attribution. We store headline, short summary and link only."
+usage_notes = "Authoritative for what the UN says and decides; factual claims about third parties still need corroboration."
+poll_minutes = 30
+enabled = true
+verified = false
+
+[[source]]
+id = "eu_council_press"
+name = "Council of the EU - press releases"
+organization = "Council of the European Union"
+category = "official_eu"
+doc_type = "official_statement"
+connector = "rss"
+url = "https://www.consilium.europa.eu/en/rss/pressreleases.ashx"
+homepage = "https://www.consilium.europa.eu/en/press/press-releases/"
+coverage = "EU and EU external relations (incl. sanctions decisions, Council conclusions)"
+languages = ["en"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "EU reuse policy (Decision 2011/833/EU): reuse allowed with acknowledgement unless stated otherwise."
+usage_notes = "Primary source for EU sanctions packages and Council conclusions. Legally binding text is in the Official Journal (EUR-Lex)."
+poll_minutes = 30
+enabled = true
+verified = false
+
+[[source]]
+id = "eu_commission_press"
+name = "European Commission - Press Corner"
+organization = "European Commission"
+category = "official_eu"
+doc_type = "official_statement"
+connector = "rss"
+url = "https://ec.europa.eu/commission/presscorner/api/rss?language=en"
+homepage = "https://ec.europa.eu/commission/presscorner/home/en"
+coverage = "EU policy, trade, enlargement, external action"
+languages = ["en"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "Commission content: CC BY 4.0 / EU reuse policy, unless stated otherwise."
+usage_notes = "High volume of domestic EU policy items -- category filters matter."
+poll_minutes = 30
+enabled = true
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 4 -- humanitarian (implemented; needs credentials)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "reliefweb_reports"
+name = "ReliefWeb - reports"
+organization = "UN OCHA (ReliefWeb)"
+category = "humanitarian"
+doc_type = "official_statement"   # refined per item from the ReliefWeb 'format' field
+connector = "reliefweb"
+url = "https://api.reliefweb.int/v2/reports"
+homepage = "https://reliefweb.int/"
+coverage = "Global humanitarian crises and disasters"
+languages = ["en", "fr", "es", "ar", "ru"]
+default_regions = []
+auth = "appname"
+auth_env = ["GIM_RELIEFWEB_APPNAME"]
+licence = "ReliefWeb terms; each report keeps its ORIGINAL publisher's copyright. Store metadata + link."
+usage_notes = "Requires a pre-approved appname (request at https://apidoc.reliefweb.int/). ReliefWeb republishes reports: publisher = ReliefWeb, original_reporter = the authoring organisation."
+poll_minutes = 60
+enabled = true
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 1b -- international media (catalogued; enable after a local --dry-run check)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "bbc_world"
+name = "BBC News - World"
+organization = "BBC"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "rss"
+url = "https://feeds.bbci.co.uk/news/world/rss.xml"
+homepage = "https://www.bbc.com/news/world"
+coverage = "Global"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "BBC feeds: personal, non-commercial use; headlines + links. Do not republish article text."
+usage_notes = ""
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "aljazeera_all"
+name = "Al Jazeera English - all"
+organization = "Al Jazeera Media Network"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "rss"
+url = "https://www.aljazeera.com/xml/rss/all.xml"
+homepage = "https://www.aljazeera.com/"
+coverage = "Global, strong Middle East / Global South coverage"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Feed for personal use; headlines + links only."
+usage_notes = "State-funded (Qatar): note editorial context on Gulf topics, as with any outlet's home region."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "france24_en"
+name = "France 24 - English"
+organization = "France Medias Monde"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "rss"
+url = "https://www.france24.com/en/rss"
+homepage = "https://www.france24.com/en/"
+coverage = "Global, strong Francophone Africa coverage"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Feed for personal use; headlines + links only."
+usage_notes = "French also available (/fr/rss) -- useful to reduce English-language bias on the Sahel."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "dw_world"
+name = "Deutsche Welle - World (English)"
+organization = "Deutsche Welle"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "rss"
+url = "https://rss.dw.com/rdf/rss-en-world"
+homepage = "https://www.dw.com/"
+coverage = "Global"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Feed for personal use; headlines + links only."
+usage_notes = "German-language feeds exist (rss-de-*)."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "africanews"
+name = "Africanews"
+organization = "Africanews (Euronews group)"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "rss"
+url = "https://www.africanews.com/feed/rss"
+homepage = "https://www.africanews.com/"
+coverage = "Africa"
+languages = ["en"]
+default_regions = ["africa"]
+auth = "none"
+auth_env = []
+licence = "Feed for personal use; headlines + links only."
+usage_notes = "Feed URL not verified -- confirm on the site footer."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "nhk_world"
+name = "NHK World - News"
+organization = "NHK (Japan Broadcasting Corporation)"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "planned"
+url = ""
+homepage = "https://www3.nhk.or.jp/nhkworld/"
+coverage = "Japan, East Asia"
+languages = ["en", "ja"]
+default_regions = ["asia_pacific"]
+auth = "none"
+auth_env = []
+licence = "Check NHK terms."
+usage_notes = "No stable public RSS URL confirmed -- find it on the site, then switch connector to rss."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "reuters"
+name = "Reuters (via GDELT discovery only)"
+organization = "Thomson Reuters"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "planned"
+url = ""
+homepage = "https://www.reuters.com/world/"
+coverage = "Global"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Reuters discontinued public RSS (2020); content is licensed commercially. Do not scrape."
+usage_notes = "Reuters items appear through GDELT; their wire copy is widely republished -> marked 'syndicated' on other sites."
+poll_minutes = 0
+enabled = false
+verified = false
+
+[[source]]
+id = "ap"
+name = "Associated Press (via GDELT discovery only)"
+organization = "Associated Press"
+category = "international_media"
+doc_type = "original_reporting"
+connector = "planned"
+url = ""
+homepage = "https://apnews.com/world-news"
+coverage = "Global"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "No official public RSS; AP content is licensed. Do not scrape."
+usage_notes = "As Reuters: discover via GDELT, detect AP-origin syndication."
+poll_minutes = 0
+enabled = false
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 2b -- further official sources (catalogued, endpoints to verify)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "uk_fcdo"
+name = "UK FCDO - news and communications"
+organization = "Foreign, Commonwealth & Development Office"
+category = "official_national"
+doc_type = "official_statement"
+connector = "rss"
+url = "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office.atom"
+homepage = "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office"
+coverage = "UK foreign policy"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Open Government Licence v3.0."
+usage_notes = "GOV.UK offers Atom feeds for organisation pages. Includes UK sanctions notices."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "us_state_press"
+name = "US Department of State - press releases"
+organization = "U.S. Department of State"
+category = "official_national"
+doc_type = "official_statement"
+connector = "rss"
+url = "https://www.state.gov/rss-feed/press-releases/feed/"
+homepage = "https://www.state.gov/"
+coverage = "US foreign policy"
+languages = ["en"]
+default_regions = ["americas"]
+auth = "none"
+auth_env = []
+licence = "US federal government works are public domain (17 U.S.C. 105)."
+usage_notes = "Feed URL not verified; state.gov lists its feeds at /rss-feeds/."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "nato_news"
+name = "NATO - news and press releases"
+organization = "NATO"
+category = "official_nato"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://www.nato.int/"
+coverage = "Euro-Atlantic security"
+languages = ["en", "fr"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "NATO site terms: reproduction with attribution."
+usage_notes = "Find the current RSS link on nato.int (site was redesigned); then switch connector to rss."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "eeas_press"
+name = "EEAS - press material"
+organization = "European External Action Service"
+category = "official_eu"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://www.eeas.europa.eu/"
+coverage = "EU foreign and security policy, HR/VP statements"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "EU reuse policy."
+usage_notes = "Statements by the High Representative. Locate RSS on the press-material page."
+poll_minutes = 60
+enabled = false
+verified = false
+
+[[source]]
+id = "fr_mfa"
+name = "France - Ministry for Europe and Foreign Affairs"
+organization = "Ministere de l'Europe et des Affaires etrangeres"
+category = "official_national"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://www.diplomatie.gouv.fr/"
+coverage = "French foreign policy"
+languages = ["fr", "en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Licence Ouverte / check site."
+usage_notes = "French-language primary source -- good for Sahel/Francophone Africa."
+poll_minutes = 120
+enabled = false
+verified = false
+
+[[source]]
+id = "de_mfa"
+name = "Germany - Federal Foreign Office"
+organization = "Auswaertiges Amt"
+category = "official_national"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://www.auswaertiges-amt.de/"
+coverage = "German foreign policy"
+languages = ["de", "en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Check site terms."
+usage_notes = ""
+poll_minutes = 120
+enabled = false
+verified = false
+
+[[source]]
+id = "ua_mfa"
+name = "Ukraine - Ministry of Foreign Affairs"
+organization = "Ministry of Foreign Affairs of Ukraine"
+category = "official_national"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://mfa.gov.ua/"
+coverage = "Ukrainian foreign policy"
+languages = ["uk", "en"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "Check site terms."
+usage_notes = "Party to an armed conflict: authoritative on Ukraine's position, not neutral on battlefield claims."
+poll_minutes = 120
+enabled = false
+verified = false
+
+[[source]]
+id = "un_security_council"
+name = "UN Security Council - meetings coverage & documents"
+organization = "United Nations"
+category = "official_un"
+doc_type = "official_statement"
+connector = "planned"
+url = ""
+homepage = "https://www.un.org/securitycouncil/"
+coverage = "Global"
+languages = ["en", "fr"]
+default_regions = ["global"]
+auth = "none"
+auth_env = []
+licence = "UN terms of use."
+usage_notes = "Resolutions and vote records: UN Digital Library (digitallibrary.un.org) has search exports."
+poll_minutes = 120
+enabled = false
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 3 -- conflict datasets (next increment)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "acled"
+name = "ACLED - event data"
+organization = "Armed Conflict Location & Event Data"
+category = "conflict_dataset"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://acleddata.com/api/acled/read"
+homepage = "https://acleddata.com/"
+coverage = "Global (coverage start year varies by country)"
+languages = ["en"]
+default_regions = []
+auth = "oauth"
+auth_env = ["GIM_ACLED_EMAIL", "GIM_ACLED_PASSWORD"]
+licence = "myACLED terms: attribution required; redistribution of raw data restricted. Never publish rows publicly."
+usage_notes = "OAuth password grant (token endpoint, client_id 'acled'); API access may need to be enabled for your account. Updated roughly weekly; event_date is the event date."
+poll_minutes = 1440
+enabled = false
+verified = false
+
+[[source]]
+id = "ucdp_ged"
+name = "UCDP Georeferenced Event Dataset"
+organization = "Uppsala Conflict Data Program"
+category = "conflict_dataset"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://ucdpapi.pcr.uu.se/api/gedevents/"
+homepage = "https://ucdp.uu.se/"
+coverage = "Global, 1989-present (annual release) + monthly candidate data"
+languages = ["en"]
+default_regions = []
+auth = "token"
+auth_env = ["GIM_UCDP_TOKEN"]
+licence = "CC BY 4.0, cite the dataset version."
+usage_notes = "Token sent as header x-ucdp-access-token (request it by e-mail). Always pin a dataset version (e.g. 25.1 / 26.1). Historical baseline, NOT real-time."
+poll_minutes = 10080
+enabled = false
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 4b -- humanitarian datasets
+# ---------------------------------------------------------------------------
+[[source]]
+id = "hdx_hapi"
+name = "HDX HAPI"
+organization = "UN OCHA Centre for Humanitarian Data"
+category = "humanitarian"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://hapi.humdata.org/api/v2/"
+homepage = "https://data.humdata.org/"
+coverage = "Countries with humanitarian operations"
+languages = ["en"]
+default_regions = []
+auth = "appname"
+auth_env = ["GIM_HDX_APP_IDENTIFIER"]
+licence = "Per underlying dataset (mostly CC BY / IGO)."
+usage_notes = "Needs an app_identifier (generated via the API). Indicators carry reference periods -- keep them."
+poll_minutes = 1440
+enabled = false
+verified = false
+
+[[source]]
+id = "unhcr_refugee_stats"
+name = "UNHCR Refugee Data Finder API"
+organization = "UNHCR"
+category = "humanitarian"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://api.unhcr.org/population/v1/"
+homepage = "https://refugeedata.unhcr.org/"
+coverage = "Global, annual / mid-year statistics"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "CC BY 4.0 (check per dataset)."
+usage_notes = "Not a high-frequency backend: fetch rarely and cache locally."
+poll_minutes = 43200
+enabled = false
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 5 -- economic & sanctions
+# ---------------------------------------------------------------------------
+[[source]]
+id = "worldbank_wdi"
+name = "World Bank - World Development Indicators"
+organization = "World Bank"
+category = "economic"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://api.worldbank.org/v2/"
+homepage = "https://data.worldbank.org/"
+coverage = "Global, annual"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "CC BY 4.0."
+usage_notes = "Store reference year AND retrieval date. Not news."
+poll_minutes = 43200
+enabled = false
+verified = false
+
+[[source]]
+id = "imf_data"
+name = "IMF data (SDMX API)"
+organization = "International Monetary Fund"
+category = "economic"
+doc_type = "dataset_record"
+connector = "planned"
+url = ""
+homepage = "https://data.imf.org/"
+coverage = "Global"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "IMF terms of use."
+usage_notes = "IMF migrated its data portal; check the current SDMX endpoint before implementing."
+poll_minutes = 43200
+enabled = false
+verified = false
+
+[[source]]
+id = "eurostat"
+name = "Eurostat API"
+organization = "Eurostat"
+category = "economic"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/"
+homepage = "https://ec.europa.eu/eurostat/"
+coverage = "EU / EFTA / candidates"
+languages = ["en", "de", "fr"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "EU reuse policy (CC BY 4.0)."
+usage_notes = "JSON-stat responses; keep reference period + release date."
+poll_minutes = 43200
+enabled = false
+verified = false
+
+[[source]]
+id = "ofac_sls"
+name = "OFAC Sanctions List Service"
+organization = "U.S. Treasury - OFAC"
+category = "sanctions"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://sanctionslistservice.ofac.treas.gov/"
+homepage = "https://ofac.treasury.gov/sanctions-list-service"
+coverage = "US sanctions designations"
+languages = ["en"]
+default_regions = []
+auth = "none"
+auth_env = []
+licence = "Public domain (US government)."
+usage_notes = "Track CHANGES between list versions (additions/removals), not just the list. Lists name individuals: store only what analysis needs."
+poll_minutes = 1440
+enabled = false
+verified = false
+
+[[source]]
+id = "eu_sanctions_fsf"
+name = "EU consolidated financial sanctions list (FSF)"
+organization = "European Commission (DG FISMA)"
+category = "sanctions"
+doc_type = "dataset_record"
+connector = "planned"
+url = ""
+homepage = "https://data.europa.eu/data/datasets/consolidated-list-of-persons-groups-and-entities-subject-to-eu-financial-sanctions"
+coverage = "EU sanctions designations"
+languages = ["en"]
+default_regions = ["europe"]
+auth = "none"
+auth_env = []
+licence = "EU reuse policy."
+usage_notes = "XML/CSV via data.europa.eu (download URL includes a token shown on the page). The EU Sanctions Map (sanctionsmap.eu) is the human-readable view."
+poll_minutes = 1440
+enabled = false
+verified = false
+
+# ---------------------------------------------------------------------------
+# PRIORITY 6 -- geospatial (later phase)
+# ---------------------------------------------------------------------------
+[[source]]
+id = "nasa_firms"
+name = "NASA FIRMS active fires"
+organization = "NASA LANCE / FIRMS"
+category = "geospatial"
+doc_type = "dataset_record"
+connector = "planned"
+url = "https://firms.modaps.eosdis.nasa.gov/api/"
+homepage = "https://firms.modaps.eosdis.nasa.gov/"
+coverage = "Global, near-real-time"
+languages = ["en"]
+default_regions = []
+auth = "token"
+auth_env = ["GIM_FIRMS_MAP_KEY"]
+licence = "NASA open data."
+usage_notes = "Thermal anomaly != attack. Agricultural burning, gas flares and industry dominate. Context required."
+poll_minutes = 360
+enabled = false
+verified = false
+
+[[source]]
+id = "copernicus"
+name = "Copernicus Data Space Ecosystem"
+organization = "European Commission / ESA"
+category = "geospatial"
+doc_type = "dataset_record"
+connector = "planned"
+url = ""
+homepage = "https://dataspace.copernicus.eu/"
+coverage = "Global Sentinel imagery"
+languages = ["en"]
+default_regions = []
+auth = "oauth"
+auth_env = ["GIM_CDSE_CLIENT_ID", "GIM_CDSE_CLIENT_SECRET"]
+licence = "Copernicus open licence."
+usage_notes = "Manual / on-demand analysis, not automated polling."
+poll_minutes = 0
+enabled = false
+verified = false

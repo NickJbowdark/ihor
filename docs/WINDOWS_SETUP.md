@@ -94,7 +94,7 @@ Change `GIM_USER_AGENT` so its contact URL points to your GitHub repo. That tell
 python -m pytest
 ```
 
-Expected result: `17 passed`. If anything fails, stop here and fix it first (see Troubleshooting).
+Expected result: all tests pass (`41 passed, 1 skipped` in Phase 2). If anything fails, stop here and fix it first (see Troubleshooting).
 
 ## 7. First real collection
 
@@ -122,6 +122,22 @@ python -m gim.ingest --region africa --timespan 7d --topic "ceasefire,peace talk
 python -m gim.ingest --help
 ```
 
+### Phase 2: the source collector (recommended)
+
+```powershell
+python -m gim.collect --source un_news --dry-run
+```
+
+```powershell
+python -m gim.collect --force
+```
+
+```powershell
+python -m gim.collect --status
+```
+
+See [PHASE2_SOURCES.md §7](PHASE2_SOURCES.md#7-how-to-test-each-source-on-windows) for testing every source.
+
 ## 8. Open the dashboard
 
 ```powershell
@@ -130,13 +146,13 @@ streamlit run app/dashboard.py
 
 Your browser opens at http://localhost:8501. Stop the dashboard with `Ctrl+C` in PowerShell.
 
-## 9. (Optional) Automatic collection every 3 hours
+## 9. (Optional) Automatic collection
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1
 ```
 
-Check it in *Task Scheduler* → "GIM Ingest". Runs happen only while the PC is on, and the overlapping 6 h window means nothing is lost between runs.
+Check it in *Task Scheduler* → "GIM Ingest". It runs `python -m gim.collect` every 30 minutes, and each source is fetched only when its own poll interval has passed. Runs happen only while the PC is on.
 
 ## Where things are
 
@@ -144,6 +160,7 @@ Check it in *Task Scheduler* → "GIM Ingest". Runs happen only while the PC is 
 |---|---|
 | Database | `data\gim.sqlite3` (back it up by copying it while nothing is running) |
 | Logs | `logs\gim.jsonl` (one JSON object per line) |
+| Source registry | `config\sources.toml` |
 | Regions / search terms | `src\gim\regions.py` |
 | Category keywords | `src\gim\pipeline\classify.py` |
 

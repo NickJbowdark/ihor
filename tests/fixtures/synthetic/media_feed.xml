@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE: imitation of a news-outlet RSS feed, used to test wire-copy detection. -->
+<rss version="2.0">
+  <channel>
+    <title>Example Daily - World</title>
+    <link>https://exampledaily.test/world</link>
+    <description>Synthetic</description>
+    <item>
+      <title>[TEST FIXTURE] Ceasefire talks resume in Istanbul</title>
+      <link>https://exampledaily.test/world/ceasefire-talks</link>
+      <description>ISTANBUL (Reuters) - Synthetic wire-style lead paragraph about Ukraine and Russia.</description>
+      <pubDate>Wed, 04 Nov 2026 07:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>[TEST FIXTURE] Our correspondent reports from Goma</title>
+      <link>https://exampledaily.test/world/goma-report</link>
+      <description>Synthetic original reporting from the DRC.</description>
+      <pubDate>Wed, 04 Nov 2026 08:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

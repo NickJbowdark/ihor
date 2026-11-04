@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE: hand-written imitation of an Atom feed. Not real Commission content. -->
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <title>European Commission Press Corner</title>
+  <id>urn:fixture:commission</id>
+  <updated>2026-11-04T12:00:00Z</updated>
+  <entry>
+    <title>[TEST FIXTURE] Commission proposes trade measures with Mercosur partners</title>
+    <link href="https://ec.europa.eu/commission/presscorner/detail/en/ip_26_0001"/>
+    <id>ip_26_0001</id>
+    <published>2026-11-04T08:00:00Z</published>
+    <updated>2026-11-04T12:00:00Z</updated>
+    <summary>Synthetic summary about trade with Brazil and Argentina.</summary>
+  </entry>
+  <entry>
+    <title>[TEST FIXTURE] Statement on Moldova's EU accession talks</title>
+    <link href="https://ec.europa.eu/commission/presscorner/detail/en/statement_26_0002"/>
+    <id>statement_26_0002</id>
+    <published>2026-11-03T10:00:00Z</published>
+    <summary>Synthetic summary on enlargement negotiations.</summary>
+  </entry>
+</feed>

@@ -1,6 +1,6 @@
 # GIM — Architecture, Evaluation and Roadmap
 
-*Status: Phase 1 implemented (GDELT collection → SQLite → Streamlit dashboard). Written 2026-11.*
+*Status: Phase 1 implemented; Phase 2a implemented (see [PHASE2_SOURCES.md](PHASE2_SOURCES.md)). Written 2026-11.*
 
 ---
 
@@ -172,7 +172,7 @@ RAG (retrieval-augmented generation) means: *search first, then let the model re
 | Phase | Deliverable | Key learning |
 |---|---|---|
 | **1 ✅** | GDELT collection per region → SQLite → dashboard with filters, story grouping, trend and source views, collection log | APIs, rate limits, provenance, data cleaning, dedup vs. corroboration |
-| **2** | Scheduled collection (Task Scheduler), RSS module with curated feed list incl. official MFA/UN/NATO feeds, FTS5 search, source registry with reliability notes (Admiralty-style A–F source / 1–6 information grading) | Source evaluation, collection plans |
+| **2** (2a ✅, see PHASE2_SOURCES.md) | Scheduled collection (Task Scheduler), RSS module with curated feed list incl. official MFA/UN/NATO feeds, FTS5 search, source registry with reliability notes (Admiralty-style A–F source / 1–6 information grading) | Source evaluation, collection plans |
 | **3** | LLM client (OpenAI-compatible, budget cap, call log); event clustering of related articles; structured extraction (actors, places, *event date*); daily brief draft → review → Markdown/PDF | Prompt design, structured output, evaluation, analytic writing |
 | **4** | ACLED + UCDP; event map; baselines and anomaly flags ("event volume in X is 3σ above its 90-day mean"); country pages | Geospatial data, base rates, indicators & warnings |
 | **5** | Hetzner VPS, systemd timers, Tailscale, backups (`sqlite3 .backup` + offsite copy), error alerts, daily email | Ops and security basics |

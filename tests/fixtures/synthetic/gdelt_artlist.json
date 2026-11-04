@@ -1,0 +1,6 @@
+{"articles": [
+ {"url": "https://www.example-news.test/world/fixture-nato-summit", "title": "[TEST FIXTURE] NATO ministers meet on air defence for Ukraine", "seendate": "20261104T101500Z", "domain": "example-news.test", "language": "English", "sourcecountry": "United Kingdom"},
+ {"url": "https://reprint-site.test/fixture-nato-summit", "title": "[TEST FIXTURE] NATO ministers meet on air defence for Ukraine", "seendate": "20261104T110000Z", "domain": "reprint-site.test", "language": "English", "sourcecountry": "United States"},
+ {"url": "https://www.reuters.com/world/fixture-iran-talks", "title": "[TEST FIXTURE] Iran and Saudi Arabia hold talks in Riyadh", "seendate": "20261104T080000Z", "domain": "reuters.com", "language": "English", "sourcecountry": "United States"},
+ {"url": "https://regional-paper.test/fixture-iran", "title": "[TEST FIXTURE] Iran, Saudi talks continue -- Reuters", "seendate": "20261104T090000Z", "domain": "regional-paper.test", "language": "English", "sourcecountry": "India"}
+]}
