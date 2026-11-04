@@ -1,0 +1,10 @@
+[browser]
+# Do not send usage statistics to Streamlit.
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+# Only reachable from this computer. Change ONLY behind authentication (see docs/ARCHITECTURE.md, Phase 5).
+address = "127.0.0.1"
