@@ -2,9 +2,9 @@
 
 A personal, AI-assisted **geopolitical OSINT platform**. It continuously collects open-source reporting on international developments, organises it with full source provenance, and (from Phase 3) drafts source-cited intelligence briefs for analyst review.
 
-> **Status: Phase 2a.** Source registry (32 catalogued sources) · connectors for GDELT, UN News, Council of the EU, European Commission, ReliefWeb · provenance-rich document store (schema v2) · Source health page · demo mode.
+> **Status: Phase 2.1.** Source registry (32 catalogued sources) · connectors for GDELT, UN News, Council of the EU, European Commission, ReliefWeb · provenance-rich document store with deterministic **event grouping** and **origin-based corroboration** (schema v3) · real-world **source validation** with diagnostic reports · source health monitoring · backups · AI data contracts (no AI yet).
 >
-> ⚠️ The connectors have been tested against **synthetic fixtures only** (the development sandbox had no network access). Verify them on your machine: see [docs/PHASE2_SOURCES.md §7](docs/PHASE2_SOURCES.md#7-how-to-test-each-source-on-windows).
+> ⚠️ Connectors are tested against **synthetic fixtures only**: the development sandbox had no network access. Run `python -m gim.validate --record` on your machine. See [docs/PHASE2_1_RELIABILITY.md](docs/PHASE2_1_RELIABILITY.md), which separates what is tested from what is assumed.
 
 ## Quick start (Windows)
 
@@ -31,7 +31,7 @@ python -m pytest
 ```
 
 ```powershell
-python -m gim.collect --source un_news --dry-run
+python -m gim.validate --record
 ```
 
 ```powershell
@@ -45,6 +45,7 @@ streamlit run app/dashboard.py
 ## Documentation
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: feasibility, architecture, data-source strategy, AI model evaluation (incl. DeepSeek V4/V4.1), hosting and budget, roadmap, validation, security.
+- **[docs/PHASE2_1_RELIABILITY.md](docs/PHASE2_1_RELIABILITY.md)**: audit of reliability/security, events vs. documents, geography fields, corroboration, AI contracts, **tested vs. assumed**, Windows commands for real-source testing and rollback.
 - **[docs/PHASE2_SOURCES.md](docs/PHASE2_SOURCES.md)**: Phase 1 audit, source catalogue, document types and provenance model, schema v2, next steps, per-source Windows testing.
 - **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**: installation and first run.
 
@@ -55,12 +56,16 @@ gim/
 ├── app/dashboard.py          # Streamlit UI: Overview · Source health · Source catalogue
 ├── config/sources.toml       # SOURCE REGISTRY: every source, its access rules, licence, poll interval
 ├── src/gim/
-│   ├── collect.py            # collector CLI (python -m gim.collect)
+│   ├── collect.py            # collector CLI (python -m gim.collect): lock, backoff, health, events
+│   ├── validate.py           # real-source validation + diagnostic report (python -m gim.validate)
+│   ├── maintenance.py        # backup / check / restore (python -m gim.maintenance)
+│   ├── security.py           # secret redaction (logs, DB, reports, fixtures)
 │   ├── demo.py               # demo database from synthetic fixtures
+│   ├── analysis/             # AI data contracts, provider protocol, bundle builder (no AI yet)
 │   ├── config.py · logging_setup.py · models.py · regions.py
 │   ├── ingest.py             # Phase 1 GDELT-only runner (legacy)
 │   ├── sources/              # registry, polite HTTP client, connectors (gdelt, rss, reliefweb)
-│   ├── pipeline/             # cleaning, keyword topics, place tagging, wire-copy detection
+│   ├── pipeline/             # cleaning, topics, place tagging, wire-copy detection, events, corroboration
 │   └── storage/db.py         # SQLite schema v2 + migration; all SQL lives here
 ├── tests/                    # pytest suite + fixtures (synthetic/ and your recorded/)
 ├── scripts/schedule_windows.ps1

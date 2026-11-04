@@ -40,7 +40,8 @@ class FetchResult:
     etag: str | None = None
     last_modified: str | None = None
     raw: list[tuple[str, bytes]] = field(default_factory=list)  # (label, body) for --record
-    notes: list[str] = field(default_factory=list)              # partial failures etc.
+    notes: list[str] = field(default_factory=list)              # human-readable remarks
+    partial: bool = False   # True if part of the source failed (e.g. 1 of 5 GDELT regions)
 
 
 class Connector(ABC):

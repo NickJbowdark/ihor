@@ -77,7 +77,7 @@ def test_migration_from_v1(tmp_path):
     old.commit()
     old.close()
     conn = db.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     rows = db.query_documents(conn, SINCE, regions=["europe"])
     assert len(rows) == 1 and rows[0]["title"] == "Old headline" and rows[0]["publisher"] == "a.test"
     assert json.loads(rows[0]["provenance"])["migrated_from"] == "v1"

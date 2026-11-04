@@ -22,3 +22,4 @@ Thumbs.db
 # Real recorded responses contain third-party content: keep local unless the licence allows sharing
 tests/fixtures/recorded/*
 !tests/fixtures/recorded/.gitkeep
+reports/

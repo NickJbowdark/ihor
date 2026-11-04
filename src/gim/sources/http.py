@@ -12,6 +12,8 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import requests
@@ -21,14 +23,44 @@ from gim.config import Settings, get_settings
 log = logging.getLogger(__name__)
 
 MAX_BYTES = 15 * 1024 * 1024
+# Retry-After waits up to this long are slept through; longer ones abort the run and the
+# collector schedules the source again after the requested time (no blocked scheduler).
+MAX_INLINE_WAIT_S = 120.0
+
+
+def parse_retry_after(value: str | None, now: datetime | None = None) -> float | None:
+    """Seconds to wait from a Retry-After header ("120" or an HTTP date). None if absent/invalid."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
 
 
 class FetchError(RuntimeError):
     """Network / HTTP failure after retries. ``status`` is the HTTP code if any."""
 
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, retry_after_s: float | None = None):
         super().__init__(message)
         self.status = status
+        self.retry_after_s = retry_after_s
+
+    @property
+    def kind(self) -> str:
+        if self.status == 429:
+            return "rate_limited"
+        if self.status is None:
+            return "network"
+        return "http_5xx" if self.status >= 500 else "http_4xx"
 
 
 @dataclass
@@ -83,11 +115,15 @@ class PoliteHttp:
                 continue
 
             if resp.status_code == 429 or resp.status_code >= 500:
-                retry_after = resp.headers.get("Retry-After", "")
+                retry_after = parse_retry_after(resp.headers.get("Retry-After"))
                 resp.close()
+                if retry_after is not None and retry_after > MAX_INLINE_WAIT_S:
+                    raise FetchError(f"HTTP {resp.status_code} from {host}; server asks to retry after "
+                                     f"{retry_after:.0f}s", resp.status_code, retry_after)
                 if attempt == attempts:
-                    raise FetchError(f"HTTP {resp.status_code} from {host}", resp.status_code)
-                wait = min(float(retry_after), 120.0) if retry_after.isdigit() else delay
+                    raise FetchError(f"HTTP {resp.status_code} from {host} after {attempts} attempts",
+                                     resp.status_code, retry_after)
+                wait = retry_after if retry_after is not None else delay
                 log.warning("HTTP %d from %s, retrying in %.0fs", resp.status_code, host, wait)
                 self._sleep(wait)
                 delay *= 2

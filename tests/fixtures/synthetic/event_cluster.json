@@ -1,0 +1,10 @@
+{"_comment": "SYNTHETIC FIXTURE (GDELT ArtList format): one fictional diplomatic meeting reported many ways, plus an unrelated event. Used to test deterministic event grouping and origin counting.",
+ "articles": [
+ {"url": "https://www.reuters.com/world/fixture-ministers-meet-geneva", "title": "[TEST FIXTURE] Armenian and Azerbaijani foreign ministers meet in Geneva for peace talks", "seendate": "20261104T080000Z", "domain": "reuters.com", "language": "English", "sourcecountry": "United Kingdom"},
+ {"url": "https://reprint-a.test/fixture-geneva", "title": "[TEST FIXTURE] Armenian and Azerbaijani foreign ministers meet in Geneva for peace talks", "seendate": "20261104T083000Z", "domain": "reprint-a.test", "language": "English", "sourcecountry": "United States"},
+ {"url": "https://reprint-b.test/fixture-geneva", "title": "[TEST FIXTURE] Armenian, Azerbaijani foreign ministers meet in Geneva for peace talks - Reuters", "seendate": "20261104T090000Z", "domain": "reprint-b.test", "language": "English", "sourcecountry": "India"},
+ {"url": "https://independent-paper.test/fixture-geneva-own", "title": "[TEST FIXTURE] Armenia and Azerbaijan foreign ministers hold peace talks in Geneva", "seendate": "20261104T100000Z", "domain": "independent-paper.test", "language": "English", "sourcecountry": "France"},
+ {"url": "https://another-paper.test/fixture-geneva", "title": "[TEST FIXTURE] Peace talks in Geneva: Armenia, Azerbaijan foreign ministers meet", "seendate": "20261104T110000Z", "domain": "another-paper.test", "language": "English", "sourcecountry": "Germany"},
+ {"url": "https://independent-paper.test/fixture-earthquake", "title": "[TEST FIXTURE] Earthquake damages villages in northern Armenia", "seendate": "20261104T120000Z", "domain": "independent-paper.test", "language": "English", "sourcecountry": "France"},
+ {"url": "https://late-paper.test/fixture-geneva-two-weeks-earlier", "title": "[TEST FIXTURE] Armenian and Azerbaijani foreign ministers meet in Geneva for peace talks", "seendate": "20261020T120000Z", "domain": "late-paper.test", "language": "English", "sourcecountry": "Italy"}
+]}

@@ -51,8 +51,13 @@ class Document:
     summary: str = ""                       # short summary as provided by the source
     original_reporter: str = ""             # e.g. 'Reuters' for wire copy, author org on ReliefWeb
     external_id: str = ""                   # source's own id / guid
-    source_country: str = ""                # country of the publisher (not of the event)
-    countries: list[str] = field(default_factory=list)   # countries mentioned / tagged
+    # GEOGRAPHY -- four different questions, never substitute one for another:
+    #   publisher_country    where the PUBLISHER is based (GDELT 'sourcecountry')
+    #   countries_mentioned  countries NAMED in title/summary (gazetteer match)
+    #   event location / countries involved  -> stored on the EVENT, unknown until
+    #   established by a dataset, an analyst or (Phase 3) checked AI extraction.
+    publisher_country: str = ""
+    countries_mentioned: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     title_fingerprint: str = ""

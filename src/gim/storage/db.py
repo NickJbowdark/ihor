@@ -12,6 +12,18 @@ Schema history
   v1 (Phase 1): articles, article_regions, ingest_runs
   v2 (Phase 2): documents (all source types), document_regions, document_sources,
                 document_revisions, source_status; ingest_runs gains data_origin/notes.
+  v3 (Phase 2.1): documents.source_country -> publisher_country, countries -> countries_mentioned;
+                events + event_documents; source_validations; locks; run metrics
+                (duplicates, duration, http status, error kind); source backoff/empty counters.
+
+Migration safety
+  * Before upgrading an EXISTING database file, a full copy is written to
+    data/backups/ (see gim.maintenance for restore).
+  * Each migration step runs inside ONE explicit transaction (BEGIN IMMEDIATE ...
+    COMMIT) including the PRAGMA user_version bump, so a crash leaves either the
+    old or the new schema -- never a half-migrated one.
+
+Timestamps: every *_at column is an ISO-8601 string in UTC with "+00:00".
 """
 from __future__ import annotations
 
@@ -20,14 +32,14 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from gim.config import get_settings
 from gim.models import Article, Document
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_V2 = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -119,6 +131,75 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
 );
 """
 
+V2_TO_V3 = """
+ALTER TABLE documents RENAME COLUMN source_country TO publisher_country;
+ALTER TABLE documents RENAME COLUMN countries TO countries_mentioned;
+
+ALTER TABLE source_status ADD COLUMN backoff_until TEXT;            -- do not contact before (Retry-After / failures)
+ALTER TABLE source_status ADD COLUMN consecutive_empty INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE source_status ADD COLUMN duplicates_last_run INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE source_status ADD COLUMN last_duration_ms INTEGER;
+ALTER TABLE source_status ADD COLUMN last_http_status INTEGER;
+ALTER TABLE source_status ADD COLUMN last_error_kind TEXT;           -- network|http_4xx|http_5xx|rate_limited|parse|credentials|unexpected
+ALTER TABLE source_status ADD COLUMN last_result TEXT;               -- ok|ok_empty|not_modified|partial|error|needs_credentials
+
+ALTER TABLE ingest_runs ADD COLUMN duplicates INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ingest_runs ADD COLUMN updated INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ingest_runs ADD COLUMN duration_ms INTEGER;
+ALTER TABLE ingest_runs ADD COLUMN http_status INTEGER;
+ALTER TABLE ingest_runs ADD COLUMN error_kind TEXT;
+
+-- An EVENT groups documents that report the same happening. IDs are never reused
+-- (AUTOINCREMENT), so "EVT-<id>" is a permanent reference for reports and the AI layer.
+CREATE TABLE IF NOT EXISTS events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    headline            TEXT NOT NULL,     -- title of the earliest member document
+    first_published_at  TEXT NOT NULL,
+    last_published_at   TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    countries_mentioned TEXT NOT NULL DEFAULT '',  -- union over member documents
+    event_country       TEXT,              -- WHERE it happened. NULL = unknown
+    countries_involved  TEXT,              -- WHO is party to it. NULL = unknown
+    location_basis      TEXT NOT NULL DEFAULT 'unknown',  -- unknown|dataset|analyst|ai_extracted
+    location_note       TEXT,
+    clustering_method   TEXT NOT NULL      -- algorithm + version that created it
+);
+CREATE INDEX IF NOT EXISTS idx_events_last ON events(last_published_at);
+
+CREATE TABLE IF NOT EXISTS event_documents (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,  -- one event per document
+    event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    link_method TEXT NOT NULL,             -- seed | same_fingerprint | title_similarity
+    similarity  REAL NOT NULL,
+    linked_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_documents_event ON event_documents(event_id);
+
+-- Results of `python -m gim.validate`. A source counts as verified only through a PASS here.
+CREATE TABLE IF NOT EXISTS source_validations (
+    id              INTEGER PRIMARY KEY,
+    source_id       TEXT NOT NULL,
+    validated_at    TEXT NOT NULL,
+    outcome         TEXT NOT NULL,         -- pass | fail | empty | skipped
+    http_status     INTEGER,
+    documents       INTEGER NOT NULL DEFAULT 0,
+    valid_documents INTEGER NOT NULL DEFAULT 0,
+    duration_ms     INTEGER,
+    summary         TEXT,
+    checks          TEXT NOT NULL DEFAULT '{}'   -- JSON detail
+);
+CREATE INDEX IF NOT EXISTS idx_source_validations_source ON source_validations(source_id, validated_at);
+
+-- Prevents two collectors (scheduler + dashboard button) from running at once.
+CREATE TABLE IF NOT EXISTS locks (
+    name        TEXT PRIMARY KEY,
+    owner       TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+"""
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -135,6 +216,9 @@ def to_iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
+FUTURE_TOLERANCE = timedelta(hours=1)
+
+
 def content_hash(title: str, summary: str) -> str:
     return hashlib.sha1(f"{title}\n{summary}".encode("utf-8")).hexdigest()[:16]
 
@@ -146,7 +230,7 @@ def _csv(values: Iterable[str]) -> str:
 # ---------------------------------------------------------------------------
 # connection & migrations
 # ---------------------------------------------------------------------------
-def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
+def connect(db_path: Path | str | None = None, *, backup_dir: Path | None = None) -> sqlite3.Connection:
     path = Path(db_path) if db_path else get_settings().db_path
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +238,7 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")  # dashboard can read while the collector writes
-    init_db(conn)
+    init_db(conn, path if str(path) != ":memory:" else None, backup_dir=backup_dir)
     return conn
 
 
@@ -166,48 +250,97 @@ def _columns(conn, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def init_db(conn: sqlite3.Connection) -> None:
+def _statements(script: str) -> list[str]:
+    """Split a SQL script into statements (executescript would COMMIT our transaction)."""
+    out, buf = [], ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            if buf.strip():
+                out.append(buf.strip())
+            buf = ""
+    return out
+
+
+@contextmanager
+def _migration_step(conn: sqlite3.Connection, to_version: int) -> Iterator[sqlite3.Connection]:
+    """One atomic migration step: BEGIN IMMEDIATE ... user_version bump ... COMMIT."""
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        conn.execute(f"PRAGMA user_version = {int(to_version)}")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def backup_database(conn: sqlite3.Connection, dest: Path) -> Path:
+    """Consistent online copy using SQLite's backup API (safe while others read/write)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    target = sqlite3.connect(dest)
+    try:
+        conn.backup(target)
+    finally:
+        target.close()
+    return dest
+
+
+def init_db(conn: sqlite3.Connection, path: Path | None = None, backup_dir: Path | None = None) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         raise RuntimeError(f"Database schema v{version} is newer than this code (v{SCHEMA_VERSION}).")
     if version == SCHEMA_VERSION:
         return
-    conn.executescript(SCHEMA_V2)  # idempotent: CREATE ... IF NOT EXISTS
-    if version == 1 or _table_exists(conn, "articles"):
-        _migrate_v1_to_v2(conn)
-    cols = _columns(conn, "ingest_runs")
-    with transaction(conn):
-        if "data_origin" not in cols:
-            conn.execute("ALTER TABLE ingest_runs ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'live'")
-        if "notes" not in cols:
-            conn.execute("ALTER TABLE ingest_runs ADD COLUMN notes TEXT")
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    has_data = _table_exists(conn, "articles") or _table_exists(conn, "documents")
+    if path is not None and has_data:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        bdir = backup_dir or path.parent / "backups"
+        dest = backup_database(conn, bdir / f"{path.stem}-pre-v{SCHEMA_VERSION}-from-v{version}-{stamp}.sqlite3")
+        import logging
+        logging.getLogger(__name__).warning("Schema upgrade v%d -> v%d: backup written to %s",
+                                            version, SCHEMA_VERSION, dest)
+    if version < 2:
+        with _migration_step(conn, 2):
+            for stmt in _statements(SCHEMA_V2):
+                conn.execute(stmt)
+            if _table_exists(conn, "articles"):
+                _migrate_v1_rows(conn)
+            cols = _columns(conn, "ingest_runs")
+            if "data_origin" not in cols:
+                conn.execute("ALTER TABLE ingest_runs ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'live'")
+            if "notes" not in cols:
+                conn.execute("ALTER TABLE ingest_runs ADD COLUMN notes TEXT")
+    if version < 3:
+        with _migration_step(conn, 3):
+            for stmt in _statements(V2_TO_V3):
+                conn.execute(stmt)
 
 
-def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
-    """Copy Phase 1 GDELT articles into the general documents table."""
-    with transaction(conn):
-        rows = conn.execute("SELECT * FROM articles").fetchall()
-        for r in rows:
-            cur = conn.execute(
-                """INSERT OR IGNORE INTO documents (source_id, canonical_url, url, title, publisher,
-                       doc_type, source_category, language, source_country, categories, title_fingerprint,
-                       content_hash, published_at, timeline_at, collected_at, last_seen_at, data_origin, provenance)
-                   VALUES ('gdelt', ?, ?, ?, ?, 'unknown', 'news_discovery', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?)""",
-                (r["canonical_url"], r["url"], r["title"], r["domain"], r["language"], r["source_country"],
-                 r["categories"], r["title_fingerprint"], content_hash(r["title"], ""), r["seen_at"], r["seen_at"],
-                 r["first_ingested_at"], r["last_ingested_at"],
-                 json.dumps({"connector": "gdelt", "migrated_from": "v1"})),
-            )
-            if cur.rowcount != 1:
-                continue
-            doc_id = cur.lastrowid
-            conn.execute("INSERT OR IGNORE INTO document_sources VALUES (?, 'gdelt', ?)",
-                         (doc_id, r["first_ingested_at"]))
-            for (region,) in conn.execute("SELECT region FROM article_regions WHERE article_id = ?", (r["id"],)):
-                conn.execute("INSERT OR IGNORE INTO document_regions VALUES (?, ?)", (doc_id, region))
-        conn.execute("DROP TABLE IF EXISTS article_regions")
-        conn.execute("DROP TABLE IF EXISTS articles")
+def _migrate_v1_rows(conn: sqlite3.Connection) -> None:
+    """Copy Phase 1 GDELT articles into the general documents table (inside a migration step)."""
+    rows = conn.execute("SELECT * FROM articles").fetchall()
+    for r in rows:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO documents (source_id, canonical_url, url, title, publisher,
+                   doc_type, source_category, language, source_country, categories, title_fingerprint,
+                   content_hash, published_at, timeline_at, collected_at, last_seen_at, data_origin, provenance)
+               VALUES ('gdelt', ?, ?, ?, ?, 'unknown', 'news_discovery', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?)""",
+            (r["canonical_url"], r["url"], r["title"], r["domain"], r["language"], r["source_country"],
+             r["categories"], r["title_fingerprint"], content_hash(r["title"], ""), r["seen_at"], r["seen_at"],
+             r["first_ingested_at"], r["last_ingested_at"],
+             json.dumps({"connector": "gdelt", "migrated_from": "v1"})),
+        )
+        if cur.rowcount != 1:
+            continue
+        doc_id = cur.lastrowid
+        conn.execute("INSERT OR IGNORE INTO document_sources VALUES (?, 'gdelt', ?)", (doc_id, r["first_ingested_at"]))
+        for (region,) in conn.execute("SELECT region FROM article_regions WHERE article_id = ?", (r["id"],)).fetchall():
+            conn.execute("INSERT OR IGNORE INTO document_regions VALUES (?, ?)", (doc_id, region))
+    conn.execute("DROP TABLE IF EXISTS article_regions")
+    conn.execute("DROP TABLE IF EXISTS articles")
 
 
 @contextmanager
@@ -233,23 +366,30 @@ def save_documents(conn: sqlite3.Connection, docs: Iterable[Document]) -> tuple[
       * if the SAME source changed title/summary -> keep the old version in document_revisions.
     """
     now = utcnow_iso()
+    future_limit = to_iso(datetime.now(timezone.utc) + FUTURE_TOLERANCE)
     new = updated = 0
     with transaction(conn):
         for d in docs:
             chash = content_hash(d.title, d.summary)
             published = to_iso(d.published_at)
+            timeline = published or now
+            if published and published > future_limit:
+                # A publication time in the future means a wrong clock/timezone at the source.
+                # Keep the stated value for provenance, but sort by collection time.
+                timeline = now
+                d.provenance = {**d.provenance, "published_at_in_future": True}
             row = conn.execute("SELECT * FROM documents WHERE canonical_url = ?", (d.canonical_url,)).fetchone()
             if row is None:
                 cur = conn.execute(
                     """INSERT INTO documents (source_id, external_id, canonical_url, url, title, summary,
-                           publisher, original_reporter, doc_type, source_category, language, source_country,
-                           countries, categories, title_fingerprint, content_hash, published_at, updated_at,
+                           publisher, original_reporter, doc_type, source_category, language, publisher_country,
+                           countries_mentioned, categories, title_fingerprint, content_hash, published_at, updated_at,
                            event_date, timeline_at, collected_at, last_seen_at, data_origin, provenance)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (d.source_id, d.external_id, d.canonical_url, d.url, d.title, d.summary, d.publisher,
-                     d.original_reporter, d.doc_type, d.source_category, d.language, d.source_country,
-                     _csv(d.countries), _csv(d.categories), d.title_fingerprint, chash, published,
-                     to_iso(d.updated_at), d.event_date, published or now, now, now, d.data_origin,
+                     d.original_reporter, d.doc_type, d.source_category, d.language, d.publisher_country,
+                     _csv(d.countries_mentioned), _csv(d.categories), d.title_fingerprint, chash, published,
+                     to_iso(d.updated_at), d.event_date, timeline, now, now, d.data_origin,
                      json.dumps(d.provenance, ensure_ascii=False, default=str)),
                 )
                 doc_id = cur.lastrowid
@@ -333,41 +473,242 @@ def query_documents(
 
 
 # ---------------------------------------------------------------------------
+# events
+# ---------------------------------------------------------------------------
+LOCATION_BASES = {"unknown", "dataset", "analyst", "ai_extracted"}
+
+
+def unassigned_documents(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT d.id, d.timeline_at, d.title, d.title_fingerprint, d.countries_mentioned
+           FROM documents d LEFT JOIN event_documents ed ON ed.document_id = d.id
+           WHERE ed.document_id IS NULL ORDER BY d.timeline_at, d.id""")
+    return [dict(r) for r in rows]
+
+
+def event_members_since(conn: sqlite3.Connection, since_iso: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT e.id AS event_id, e.first_published_at, e.last_published_at,
+                  d.id, d.timeline_at, d.title, d.title_fingerprint, d.countries_mentioned
+           FROM events e JOIN event_documents ed ON ed.event_id = e.id JOIN documents d ON d.id = ed.document_id
+           WHERE e.last_published_at >= ? ORDER BY e.id, d.id""", (since_iso,))
+    return [dict(r) for r in rows]
+
+
+def create_event(conn: sqlite3.Connection, headline: str, at_iso: str, method: str) -> int:
+    now = utcnow_iso()
+    cur = conn.execute(
+        """INSERT INTO events (headline, first_published_at, last_published_at, created_at, updated_at,
+               clustering_method) VALUES (?,?,?,?,?,?)""", (headline, at_iso, at_iso, now, now, method))
+    return int(cur.lastrowid)
+
+
+def link_event_document(conn: sqlite3.Connection, event_id: int, document_id: int, method: str,
+                        similarity: float) -> None:
+    conn.execute("INSERT OR IGNORE INTO event_documents VALUES (?,?,?,?,?)",
+                 (document_id, event_id, method, similarity, utcnow_iso()))
+
+
+def refresh_event(conn: sqlite3.Connection, event_id: int) -> None:
+    """Recompute time span, headline (earliest member) and mentioned countries."""
+    docs = conn.execute(
+        """SELECT d.timeline_at, d.title, d.countries_mentioned FROM documents d
+           JOIN event_documents ed ON ed.document_id = d.id WHERE ed.event_id = ? ORDER BY d.timeline_at, d.id""",
+        (event_id,)).fetchall()
+    if not docs:
+        return
+    countries: list[str] = []
+    for d in docs:
+        for c in (d["countries_mentioned"] or "").split(","):
+            if c and c not in countries:
+                countries.append(c)
+    conn.execute(
+        """UPDATE events SET first_published_at=?, last_published_at=?, headline=?, countries_mentioned=?,
+               updated_at=? WHERE id=?""",
+        (docs[0]["timeline_at"], docs[-1]["timeline_at"], docs[0]["title"], ",".join(countries), utcnow_iso(),
+         event_id))
+
+
+def set_event_location(conn: sqlite3.Connection, event_id: int, *, event_country: str | None,
+                       countries_involved: list[str] | None, basis: str, note: str = "") -> None:
+    """Record WHERE an event happened / WHO is involved, with the basis of that knowledge.
+
+    Only an explicit basis (dataset, analyst, ai_extracted) may set it -- publisher or
+    mentioned countries are never copied here automatically.
+    """
+    if basis not in LOCATION_BASES or basis == "unknown":
+        raise ValueError(f"basis must be one of {sorted(LOCATION_BASES - {'unknown'})}")
+    with transaction(conn):
+        conn.execute(
+            """UPDATE events SET event_country=?, countries_involved=?, location_basis=?, location_note=?,
+                   updated_at=? WHERE id=?""",
+            (event_country, _csv(countries_involved or []) or None, basis, note, utcnow_iso(), event_id))
+
+
+def query_events(conn: sqlite3.Connection, since: datetime, until: datetime | None = None,
+                 regions: list[str] | None = None, text: str | None = None,
+                 data_origins: list[str] | None = None, limit: int = 2000) -> list[dict[str, Any]]:
+    where = ["e.last_published_at >= ?"]
+    params: list[Any] = [to_iso(since)]
+    if until:
+        where.append("e.first_published_at <= ?")
+        params.append(to_iso(until))
+    member_filter = []
+    if regions:
+        member_filter.append(f"d.id IN (SELECT document_id FROM document_regions WHERE region IN ({','.join('?' * len(regions))}))")
+        params.extend(regions)
+    if data_origins:
+        member_filter.append(f"d.data_origin IN ({','.join('?' * len(data_origins))})")
+        params.extend(data_origins)
+    if text:
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        member_filter.append("(d.title LIKE ? ESCAPE '\\' OR d.summary LIKE ? ESCAPE '\\')")
+        params.extend([f"%{escaped}%"] * 2)
+    if member_filter:
+        where.append("e.id IN (SELECT ed.event_id FROM event_documents ed JOIN documents d ON d.id = ed.document_id"
+                     " WHERE " + " AND ".join(member_filter) + ")")
+    sql = f"""
+        SELECT e.*,
+               (SELECT COUNT(*) FROM event_documents WHERE event_id = e.id) AS documents,
+               (SELECT COUNT(DISTINCT d.publisher) FROM event_documents ed JOIN documents d ON d.id = ed.document_id
+                 WHERE ed.event_id = e.id) AS publishers
+        FROM events e WHERE {' AND '.join(where)}
+        ORDER BY e.last_published_at DESC, e.id DESC LIMIT ?"""
+    params.append(int(limit))
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def event_documents(conn: sqlite3.Connection, event_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    if not event_ids:
+        return {}
+    out: dict[int, list[dict[str, Any]]] = {i: [] for i in event_ids}
+    for chunk_start in range(0, len(event_ids), 500):
+        chunk = event_ids[chunk_start:chunk_start + 500]
+        rows = conn.execute(
+            f"""SELECT ed.event_id, ed.link_method, ed.similarity, d.*,
+                       (SELECT GROUP_CONCAT(source_id) FROM document_sources WHERE document_id = d.id) AS delivered_by
+                FROM event_documents ed JOIN documents d ON d.id = ed.document_id
+                WHERE ed.event_id IN ({','.join('?' * len(chunk))}) ORDER BY d.timeline_at, d.id""", chunk)
+        for r in rows:
+            out[r["event_id"]].append(dict(r))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # source health
 # ---------------------------------------------------------------------------
 def get_source_status(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     return {r["source_id"]: dict(r) for r in conn.execute("SELECT * FROM source_status")}
 
 
-def record_source_attempt(conn: sqlite3.Connection, source_id: str, *, status: str, error: str | None = None,
-                          items: int = 0, new: int = 0, etag: str | None = None,
-                          last_modified: str | None = None) -> None:
-    """status: ok | not_modified | error | needs_credentials."""
+def record_source_attempt(conn: sqlite3.Connection, source_id: str, *, result: str, error: str | None = None,
+                          error_kind: str | None = None, items: int = 0, new: int = 0, duplicates: int = 0,
+                          duration_ms: int | None = None, http_status: int | None = None,
+                          etag: str | None = None, last_modified: str | None = None,
+                          backoff_until: str | None = None) -> None:
+    """Update a source's health after one collection attempt.
+
+    result: ok | ok_empty | not_modified | partial | error | needs_credentials
+      * ok / ok_empty / partial count as SUCCESS (the source answered and parsed).
+        ok_empty is tracked separately: zero items is not a failure, but a long
+        series of empty runs is suspicious (consecutive_empty).
+      * not_modified (HTTP 304) is a success that keeps the previous validators.
+      * error increments consecutive_failures (-> degraded, then failing at 3).
+    Never touches stored documents: a failing source cannot delete collected data.
+    """
     now = utcnow_iso()
-    success = status in ("ok", "not_modified")
     with transaction(conn):
         conn.execute("INSERT OR IGNORE INTO source_status (source_id) VALUES (?)", (source_id,))
-        if success:
-            conn.execute(
-                """UPDATE source_status SET status='ok', last_attempt_at=?, last_success_at=?,
-                       consecutive_failures=0, items_last_run=?, new_last_run=?,
-                       etag=COALESCE(?, etag), last_modified=COALESCE(?, last_modified)
-                   WHERE source_id=?""",
-                (now, now, items, new, etag, last_modified, source_id),
-            )
-        elif status == "needs_credentials":
-            conn.execute(
-                "UPDATE source_status SET status='needs_credentials', last_attempt_at=?, last_error=? WHERE source_id=?",
-                (now, error, source_id),
-            )
-        else:
-            conn.execute(
-                """UPDATE source_status SET last_attempt_at=?, last_error=?, last_error_at=?,
-                       consecutive_failures=consecutive_failures+1,
-                       status=CASE WHEN consecutive_failures+1 >= 3 THEN 'failing' ELSE 'degraded' END
-                   WHERE source_id=?""",
-                (now, error, now, source_id),
-            )
+        common = dict(last_attempt_at=now, last_result=result, last_duration_ms=duration_ms,
+                      last_http_status=http_status, backoff_until=backoff_until)
+        if result in ("ok", "ok_empty", "partial"):
+            sets = {**common, "status": "ok", "last_success_at": now, "consecutive_failures": 0,
+                    "items_last_run": items, "new_last_run": new, "duplicates_last_run": duplicates,
+                    # store exactly what the server sent this time (None clears a stale validator)
+                    "etag": etag, "last_modified": last_modified,
+                    "last_error_kind": error_kind if result == "partial" else None}
+            if result == "partial":
+                sets.update(last_error=error, last_error_at=now)
+            conn.execute(_update_sql(sets) + ", consecutive_empty = CASE WHEN ? THEN consecutive_empty + 1 ELSE 0 END"
+                         " WHERE source_id = ?", (*sets.values(), result == "ok_empty", source_id))
+            return
+        if result == "not_modified":
+            sets = {**common, "status": "ok", "last_success_at": now, "consecutive_failures": 0,
+                    "items_last_run": 0, "new_last_run": 0, "duplicates_last_run": 0,
+                    "etag": etag, "last_modified": last_modified}
+            conn.execute(_update_sql(sets) + " WHERE source_id = ?", (*sets.values(), source_id))
+            return
+        if result == "needs_credentials":
+            sets = {**common, "status": "needs_credentials", "last_error": error, "last_error_kind": "credentials"}
+            conn.execute(_update_sql(sets) + " WHERE source_id = ?", (*sets.values(), source_id))
+            return
+        sets = {**common, "last_error": error, "last_error_at": now, "last_error_kind": error_kind or "unexpected"}
+        conn.execute(
+            _update_sql(sets) + ", consecutive_failures = consecutive_failures + 1,"
+            " status = CASE WHEN consecutive_failures + 1 >= 3 THEN 'failing' ELSE 'degraded' END WHERE source_id = ?",
+            (*sets.values(), source_id))
+
+
+def _update_sql(sets: dict[str, Any]) -> str:
+    # keys are fixed column names from this module -- never user input
+    return "UPDATE source_status SET " + ", ".join(f"{k} = ?" for k in sets)
+
+
+# ---------------------------------------------------------------------------
+# locks (single collector at a time)
+# ---------------------------------------------------------------------------
+def acquire_lock(conn: sqlite3.Connection, name: str, owner: str, ttl: timedelta = timedelta(minutes=30)) -> bool:
+    """Atomically take a named lock. An expired lock (crashed run) is taken over."""
+    now = datetime.now(timezone.utc)
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT owner, expires_at FROM locks WHERE name = ?", (name,)).fetchone()
+        if row and row["owner"] != owner and datetime.fromisoformat(row["expires_at"]) > now:
+            conn.execute("ROLLBACK")
+            return False
+        conn.execute("INSERT OR REPLACE INTO locks (name, owner, acquired_at, expires_at) VALUES (?,?,?,?)",
+                     (name, owner, to_iso(now), to_iso(now + ttl)))
+        conn.execute("COMMIT")
+        return True
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def release_lock(conn: sqlite3.Connection, name: str, owner: str) -> None:
+    with transaction(conn):
+        conn.execute("DELETE FROM locks WHERE name = ? AND owner = ?", (name, owner))
+
+
+def get_lock(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM locks WHERE name = ?", (name,)).fetchone()
+    if row and datetime.fromisoformat(row["expires_at"]) > datetime.now(timezone.utc):
+        return dict(row)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# validations
+# ---------------------------------------------------------------------------
+def record_validation(conn: sqlite3.Connection, source_id: str, outcome: str, *, http_status: int | None,
+                      documents: int, valid_documents: int, duration_ms: int | None, summary: str,
+                      checks: dict[str, Any]) -> None:
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO source_validations (source_id, validated_at, outcome, http_status, documents,
+                   valid_documents, duration_ms, summary, checks) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (source_id, utcnow_iso(), outcome, http_status, documents, valid_documents, duration_ms, summary,
+             json.dumps(checks, ensure_ascii=False, default=str)),
+        )
+
+
+def latest_validations(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT v.* FROM source_validations v
+           JOIN (SELECT source_id, MAX(id) AS id FROM source_validations GROUP BY source_id) m ON m.id = v.id""")
+    return {r["source_id"]: dict(r) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -384,11 +725,15 @@ def start_run(conn: sqlite3.Connection, source: str, region: str, query: str, ti
 
 
 def finish_run(conn: sqlite3.Connection, run_id: int, fetched: int = 0, new: int = 0,
-               error: str | None = None, status: str | None = None, notes: str | None = None) -> None:
+               error: str | None = None, status: str | None = None, notes: str | None = None, *,
+               duplicates: int = 0, updated: int = 0, duration_ms: int | None = None,
+               http_status: int | None = None, error_kind: str | None = None) -> None:
     with transaction(conn):
         conn.execute(
-            "UPDATE ingest_runs SET finished_at=?, fetched=?, new=?, status=?, error=?, notes=? WHERE id=?",
-            (utcnow_iso(), fetched, new, status or ("error" if error else "ok"), error, notes, run_id),
+            """UPDATE ingest_runs SET finished_at=?, fetched=?, new=?, status=?, error=?, notes=?,
+                   duplicates=?, updated=?, duration_ms=?, http_status=?, error_kind=? WHERE id=?""",
+            (utcnow_iso(), fetched, new, status or ("error" if error else "ok"), error, notes,
+             duplicates, updated, duration_ms, http_status, error_kind, run_id),
         )
 
 
@@ -417,6 +762,7 @@ def query_articles(conn: sqlite3.Connection, since: datetime, until: datetime | 
     rows = query_documents(conn, since, until, regions, categories, text, limit=limit)
     for r in rows:
         r["seen_at"] = r["timeline_at"]
+        r["source_country"] = r["publisher_country"]
         r["domain"] = r["publisher"]
         r["first_ingested_at"] = r["collected_at"]
     return rows

@@ -30,6 +30,7 @@ from gim.models import Article, Document
 from gim.pipeline.attribution import classify_reporting
 from gim.pipeline.geo import tag_places
 from gim.sources.base import Connector, FetchResult, FetchState
+from gim.sources.http import MAX_INLINE_WAIT_S, parse_retry_after
 from gim.pipeline.classify import classify_title
 from gim.pipeline.normalize import canonicalize_url, clean_text, is_safe_url, title_fingerprint
 from gim.regions import REGIONS, build_query
@@ -79,9 +80,12 @@ class GdeltClient:
 
             if resp.status_code == 429 or resp.status_code >= 500:
                 log.warning("GDELT HTTP %d (attempt %d/%d)", resp.status_code, attempt, attempts)
+                retry_after = parse_retry_after(getattr(resp, "headers", {}).get("Retry-After"))
+                if retry_after is not None and retry_after > MAX_INLINE_WAIT_S:
+                    raise GdeltError(f"GDELT rate limit: retry after {retry_after:.0f}s")
                 if attempt == attempts:
                     raise GdeltError(f"GDELT unavailable (HTTP {resp.status_code})")
-                time.sleep(delay)
+                time.sleep(retry_after if retry_after is not None else delay)
                 delay *= 2
                 continue
             if resp.status_code != 200:
@@ -184,7 +188,7 @@ def article_to_document(a: Article, region: str, query: str) -> Document:
         source_id="gdelt", url=a.url, canonical_url=a.canonical_url, title=a.title,
         publisher=a.domain, source_category="news_discovery", doc_type=doc_type,
         language=a.language, published_at=a.seen_at, original_reporter=reporter,
-        source_country=a.source_country, countries=countries,
+        publisher_country=a.source_country, countries_mentioned=countries,
         regions=sorted(set(regions) | {region}), categories=a.categories,
         title_fingerprint=a.title_fingerprint,
         provenance={"connector": "gdelt", "gdelt_query": query, "gdelt_region": region,
@@ -218,5 +222,7 @@ class GdeltConnector(Connector):
             result.documents.extend(article_to_document(a, key, query) for a in parse_artlist(data))
         if failures and len(failures) == len(keys):
             raise GdeltError("; ".join(failures))
-        result.notes.extend(failures)
+        if failures:
+            result.notes.extend(failures)
+            result.partial = True
         return result

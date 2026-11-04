@@ -17,6 +17,7 @@ from pathlib import Path
 
 from gim.config import PROJECT_ROOT, get_settings
 from gim.models import Document
+from gim.pipeline.events import assign_events
 from gim.sources.gdelt import article_to_document, parse_artlist
 from gim.sources.registry import get_registry
 from gim.sources.reliefweb import parse_reports
@@ -36,6 +37,8 @@ def load_fixture_documents() -> list[Document]:
     data = json.loads((FIXTURES / "gdelt_artlist.json").read_text("utf-8"))
     docs += [article_to_document(a, "europe" if "NATO" in a.title else "middle_east", "fixture")
              for a in parse_artlist(data)]
+    cluster = json.loads((FIXTURES / "event_cluster.json").read_text("utf-8"))
+    docs += [article_to_document(a, "europe", "fixture") for a in parse_artlist(cluster)]
     return docs
 
 
@@ -56,6 +59,7 @@ def build_demo(path: Path = DEMO_DB) -> int:
     run = db.start_run(conn, "fixtures", "-", str(FIXTURES), "-", data_origin="fixture")
     new, _ = db.save_documents(conn, docs)
     db.finish_run(conn, run, fetched=len(docs), new=new, notes="synthetic fixtures loaded by gim.demo")
+    assign_events(conn)
     conn.close()
     return new
 

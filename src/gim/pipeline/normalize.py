@@ -75,6 +75,15 @@ def clean_text(text: str | None, max_len: int = MAX_TITLE_LEN) -> str:
     return text
 
 
+def key_tokens(title: str) -> list[str]:
+    """Lower-cased, accent-free headline words without stopwords or outlet suffix."""
+    t = _OUTLET_SUFFIX.sub("", title)
+    t = unicodedata.normalize("NFKD", t.lower())
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    tokens = re.findall(r"\w+", t)
+    return sorted({tok for tok in tokens if tok not in _STOPWORDS and len(tok) > 1})
+
+
 def title_fingerprint(title: str) -> str:
     """Fingerprint for spotting the same story syndicated under several URLs.
 
@@ -82,9 +91,4 @@ def title_fingerprint(title: str) -> str:
     near-identical headlines. Two articles with the same fingerprint are very
     likely ONE report copied -- which is NOT independent corroboration.
     """
-    t = _OUTLET_SUFFIX.sub("", title)
-    t = unicodedata.normalize("NFKD", t.lower())
-    t = "".join(ch for ch in t if not unicodedata.combining(ch))
-    tokens = re.findall(r"\w+", t)
-    key_tokens = sorted({tok for tok in tokens if tok not in _STOPWORDS and len(tok) > 1})
-    return hashlib.sha1(" ".join(key_tokens).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(" ".join(key_tokens(title)).encode("utf-8")).hexdigest()[:16]

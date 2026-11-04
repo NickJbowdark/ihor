@@ -11,13 +11,24 @@ import logging.handlers
 from datetime import datetime, timezone
 
 from gim.config import get_settings
+from gim.security import redact
 
 _CONFIGURED = False
 _STD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
 
 
-class JsonFormatter(logging.Formatter):
+class RedactingFormatter(logging.Formatter):
+    """Console formatter that strips credentials from every message."""
+
     def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:  # noqa: D102  (output is redacted below)
+        return redact(self._format(record))
+
+    def _format(self, record: logging.LogRecord) -> str:
         payload = {
             "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
@@ -44,7 +55,7 @@ def setup_logging() -> None:
     root.setLevel(settings.log_level)
 
     console = logging.StreamHandler()
-    console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+    console.setFormatter(RedactingFormatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
     root.addHandler(console)
 
     file_handler = logging.handlers.RotatingFileHandler(

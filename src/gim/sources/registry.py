@@ -52,7 +52,6 @@ class SourceSpec:
     usage_notes: str
     poll_minutes: int
     enabled: bool
-    verified: bool
     extra: dict = field(default_factory=dict, compare=False, hash=False)
 
     @property
@@ -97,7 +96,7 @@ def _validate(raw: dict, index: int) -> SourceSpec:
         languages=tuple(raw.get("languages", [])), default_regions=tuple(raw.get("default_regions", [])),
         auth=raw.get("auth", "none"), auth_env=tuple(raw.get("auth_env", [])),
         licence=raw.get("licence", ""), usage_notes=raw.get("usage_notes", ""),
-        poll_minutes=poll, enabled=bool(raw.get("enabled", False)), verified=bool(raw.get("verified", False)),
+        poll_minutes=poll, enabled=bool(raw.get("enabled", False)),
         extra={k: v for k, v in raw.items() if k not in _KNOWN_KEYS},
     )
 

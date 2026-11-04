@@ -1,5 +1,7 @@
 # Phase 2 — Sources, connectors and provenance
 
+> **Updated by Phase 2.1:** validation, events, geography fields, reliability and Windows testing are now described in [PHASE2_1_RELIABILITY.md](PHASE2_1_RELIABILITY.md). Where the two documents differ, Phase 2.1 is authoritative. In particular, sources are verified by `python -m gim.validate`, not by editing `verified` in the TOML (that field was removed).
+
 *Status: increment 2a implemented: source registry, connector framework, GDELT, UN News, Council of the EU, European Commission, ReliefWeb (needs appname), source health, demo mode. Written 2026-11-04.*
 
 > **Testing status, stated plainly.** The development sandbox could not reach any external source (every outbound request was refused by its proxy). **No connector has yet been run against a live response.** All automated tests use hand-written fixtures in `tests/fixtures/synthetic/` that imitate each source's documented format, and every fixture title starts with `[TEST FIXTURE]`. Section 7 explains how to verify each source on your Windows PC and turn real responses into regression tests.
@@ -60,7 +62,7 @@
 | OFAC SLS, EU FSF sanctions list | 📝 | Free downloads | Track list *changes* |
 | NASA FIRMS, Copernicus | 📝 | MAP_KEY / OAuth | Later phase. Thermal anomaly ≠ attack |
 
-**What I couldn't verify, and how you do it:** for every 🧪 and 📝 entry, run `python -m gim.collect --source <id> --dry-run`. If it parses, set `verified = true` (and `enabled = true` if you want it collected). If it fails, find the real feed link on the source's website and update `url`.
+**What I couldn't verify, and how you do it:** run `python -m gim.validate --all`. Sources that PASS are recorded as verified, with a date. For a disabled feed that passes, set `enabled = true` if you want it collected. If one fails, find the real feed link on the source's website and update `url`.
 
 ---
 
@@ -139,7 +141,7 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
-Expected: `41 passed, 1 skipped` (the skipped test waits for your recorded responses).
+Expected (Phase 2.1): `79 passed, 1 skipped` (the skipped test waits for your recorded responses).
 
 **Back up your Phase 1 database** before the automatic migration:
 
@@ -199,7 +201,7 @@ Back to live data in the same PowerShell window:
 Remove-Item Env:GIM_DB_PATH; streamlit run app/dashboard.py
 ```
 
-**After a source passes,** edit `config/sources.toml` and set `verified = true`. For disabled media feeds that pass, also set `enabled = true`.
+**After a source passes** `python -m gim.validate`, it shows as *verified <date>* on the Source health page. No manual flag is needed. For disabled media feeds that pass, set `enabled = true`.
 
 **Scheduling:** re-run `scripts\schedule_windows.ps1`. It now calls `python -m gim.collect` every 30 minutes, and each source is fetched only when its own `poll_minutes` interval has passed.
 

@@ -94,7 +94,7 @@ Change `GIM_USER_AGENT` so its contact URL points to your GitHub repo. That tell
 python -m pytest
 ```
 
-Expected result: all tests pass (`41 passed, 1 skipped` in Phase 2). If anything fails, stop here and fix it first (see Troubleshooting).
+Expected result: all tests pass (`79 passed, 1 skipped` in Phase 2.1). If anything fails, stop here and fix it first (see Troubleshooting).
 
 ## 7. First real collection
 
@@ -122,10 +122,10 @@ python -m gim.ingest --region africa --timespan 7d --topic "ceasefire,peace talk
 python -m gim.ingest --help
 ```
 
-### Phase 2: the source collector (recommended)
+### Phase 2: validate sources, then collect (recommended)
 
 ```powershell
-python -m gim.collect --source un_news --dry-run
+python -m gim.validate --record
 ```
 
 ```powershell
@@ -136,7 +136,7 @@ python -m gim.collect --force
 python -m gim.collect --status
 ```
 
-See [PHASE2_SOURCES.md §7](PHASE2_SOURCES.md#7-how-to-test-each-source-on-windows) for testing every source.
+See [PHASE2_1_RELIABILITY.md §4](PHASE2_1_RELIABILITY.md#4-windows-testing-real-sources-step-by-step) for testing every source, reading the report, and restoring backups.
 
 ## 8. Open the dashboard
 
@@ -152,14 +152,16 @@ Your browser opens at http://localhost:8501. Stop the dashboard with `Ctrl+C` in
 powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1
 ```
 
-Check it in *Task Scheduler* → "GIM Ingest". It runs `python -m gim.collect` every 30 minutes, and each source is fetched only when its own poll interval has passed. Runs happen only while the PC is on.
+Check it in *Task Scheduler* → "GIM Ingest". It runs `python -m gim.collect` every 30 minutes, and each source is fetched only when its own poll interval has passed. A second task, "GIM Backup", backs up the database daily. Runs happen only while the PC is on.
 
 ## Where things are
 
 | What | Where |
 |---|---|
 | Database | `data\gim.sqlite3` (back it up by copying it while nothing is running) |
-| Logs | `logs\gim.jsonl` (one JSON object per line) |
+| Logs | `logs\gim.jsonl` (one JSON object per line, credentials redacted) |
+| Backups | `data\backups\` (`python -m gim.maintenance list`) |
+| Validation reports | `reports\validation\` |
 | Source registry | `config\sources.toml` |
 | Regions / search terms | `src\gim\regions.py` |
 | Category keywords | `src\gim\pipeline\classify.py` |
@@ -174,5 +176,5 @@ To inspect the database directly, install the free [DB Browser for SQLite](https
 | `ModuleNotFoundError: No module named 'gim'` | The venv isn't active (no `(.venv)` in the prompt), or step 4 was skipped. |
 | `GDELT rejected the query: ...` | A search term in `regions.py` is invalid (e.g. a word that is too short, like "EU"). The message says which rule was broken. |
 | `GDELT unavailable (HTTP 429)` | Too many requests. Wait a few minutes and don't lower `GIM_GDELT_MIN_INTERVAL_S`. |
-| `database is locked` | Two collectors are running at once. Wait for one to finish. |
+| `Skipped: another collection is already running` | Another collector (scheduler or dashboard) holds the lock. It expires automatically after 30 min if that run crashed. |
 | `py` not found | Reinstall Python with "Add to PATH" ticked, then reopen PowerShell. |

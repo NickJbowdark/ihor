@@ -27,8 +27,10 @@
 #   usage_notes   access etiquette and analytical caveats
 #   poll_minutes  minimum minutes between collection runs
 #   enabled       collect automatically?
-#   verified      has a real response been fetched & parsed successfully at least once?
-#                 (false = endpoint taken from documentation, not yet tested)
+#
+# VERIFICATION is not declared here. It is recorded by `python -m gim.validate`
+# (schema + document-quality checks against a real response) and shown on the
+# Source health page with its date.
 #
 # NOTE: there is deliberately NO "reliability score" field. Reliability is assessed
 # per claim / per event (evidence, independence, attribution), not per organisation.
@@ -54,7 +56,6 @@ licence = "Free; metadata may be used with attribution to GDELT. Linked articles
 usage_notes = "Discovery only, NOT verification. Max ~1 request / 5 s. Rolling ~3-month window. sourcecountry = outlet country, not event location."
 poll_minutes = 180
 enabled = true
-verified = false   # verified on your Windows PC with: python -m gim.collect --source gdelt --dry-run
 
 # ---------------------------------------------------------------------------
 # PRIORITY 2 -- official / primary sources (implemented first)
@@ -77,7 +78,6 @@ licence = "UN website terms of use; reproduce with attribution. We store headlin
 usage_notes = "Authoritative for what the UN says and decides; factual claims about third parties still need corroboration."
 poll_minutes = 30
 enabled = true
-verified = false
 
 [[source]]
 id = "eu_council_press"
@@ -97,7 +97,6 @@ licence = "EU reuse policy (Decision 2011/833/EU): reuse allowed with acknowledg
 usage_notes = "Primary source for EU sanctions packages and Council conclusions. Legally binding text is in the Official Journal (EUR-Lex)."
 poll_minutes = 30
 enabled = true
-verified = false
 
 [[source]]
 id = "eu_commission_press"
@@ -117,7 +116,6 @@ licence = "Commission content: CC BY 4.0 / EU reuse policy, unless stated otherw
 usage_notes = "High volume of domestic EU policy items -- category filters matter."
 poll_minutes = 30
 enabled = true
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 4 -- humanitarian (implemented; needs credentials)
@@ -140,7 +138,6 @@ licence = "ReliefWeb terms; each report keeps its ORIGINAL publisher's copyright
 usage_notes = "Requires a pre-approved appname (request at https://apidoc.reliefweb.int/). ReliefWeb republishes reports: publisher = ReliefWeb, original_reporter = the authoring organisation."
 poll_minutes = 60
 enabled = true
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 1b -- international media (catalogued; enable after a local --dry-run check)
@@ -163,7 +160,6 @@ licence = "BBC feeds: personal, non-commercial use; headlines + links. Do not re
 usage_notes = ""
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "aljazeera_all"
@@ -183,7 +179,6 @@ licence = "Feed for personal use; headlines + links only."
 usage_notes = "State-funded (Qatar): note editorial context on Gulf topics, as with any outlet's home region."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "france24_en"
@@ -203,7 +198,6 @@ licence = "Feed for personal use; headlines + links only."
 usage_notes = "French also available (/fr/rss) -- useful to reduce English-language bias on the Sahel."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "dw_world"
@@ -223,7 +217,6 @@ licence = "Feed for personal use; headlines + links only."
 usage_notes = "German-language feeds exist (rss-de-*)."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "africanews"
@@ -243,7 +236,6 @@ licence = "Feed for personal use; headlines + links only."
 usage_notes = "Feed URL not verified -- confirm on the site footer."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "nhk_world"
@@ -263,7 +255,6 @@ licence = "Check NHK terms."
 usage_notes = "No stable public RSS URL confirmed -- find it on the site, then switch connector to rss."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "reuters"
@@ -283,7 +274,6 @@ licence = "Reuters discontinued public RSS (2020); content is licensed commercia
 usage_notes = "Reuters items appear through GDELT; their wire copy is widely republished -> marked 'syndicated' on other sites."
 poll_minutes = 0
 enabled = false
-verified = false
 
 [[source]]
 id = "ap"
@@ -303,7 +293,6 @@ licence = "No official public RSS; AP content is licensed. Do not scrape."
 usage_notes = "As Reuters: discover via GDELT, detect AP-origin syndication."
 poll_minutes = 0
 enabled = false
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 2b -- further official sources (catalogued, endpoints to verify)
@@ -326,7 +315,6 @@ licence = "Open Government Licence v3.0."
 usage_notes = "GOV.UK offers Atom feeds for organisation pages. Includes UK sanctions notices."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "us_state_press"
@@ -346,7 +334,6 @@ licence = "US federal government works are public domain (17 U.S.C. 105)."
 usage_notes = "Feed URL not verified; state.gov lists its feeds at /rss-feeds/."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "nato_news"
@@ -366,7 +353,6 @@ licence = "NATO site terms: reproduction with attribution."
 usage_notes = "Find the current RSS link on nato.int (site was redesigned); then switch connector to rss."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "eeas_press"
@@ -386,7 +372,6 @@ licence = "EU reuse policy."
 usage_notes = "Statements by the High Representative. Locate RSS on the press-material page."
 poll_minutes = 60
 enabled = false
-verified = false
 
 [[source]]
 id = "fr_mfa"
@@ -406,7 +391,6 @@ licence = "Licence Ouverte / check site."
 usage_notes = "French-language primary source -- good for Sahel/Francophone Africa."
 poll_minutes = 120
 enabled = false
-verified = false
 
 [[source]]
 id = "de_mfa"
@@ -426,7 +410,6 @@ licence = "Check site terms."
 usage_notes = ""
 poll_minutes = 120
 enabled = false
-verified = false
 
 [[source]]
 id = "ua_mfa"
@@ -446,7 +429,6 @@ licence = "Check site terms."
 usage_notes = "Party to an armed conflict: authoritative on Ukraine's position, not neutral on battlefield claims."
 poll_minutes = 120
 enabled = false
-verified = false
 
 [[source]]
 id = "un_security_council"
@@ -466,7 +448,6 @@ licence = "UN terms of use."
 usage_notes = "Resolutions and vote records: UN Digital Library (digitallibrary.un.org) has search exports."
 poll_minutes = 120
 enabled = false
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 3 -- conflict datasets (next increment)
@@ -489,7 +470,6 @@ licence = "myACLED terms: attribution required; redistribution of raw data restr
 usage_notes = "OAuth password grant (token endpoint, client_id 'acled'); API access may need to be enabled for your account. Updated roughly weekly; event_date is the event date."
 poll_minutes = 1440
 enabled = false
-verified = false
 
 [[source]]
 id = "ucdp_ged"
@@ -509,7 +489,6 @@ licence = "CC BY 4.0, cite the dataset version."
 usage_notes = "Token sent as header x-ucdp-access-token (request it by e-mail). Always pin a dataset version (e.g. 25.1 / 26.1). Historical baseline, NOT real-time."
 poll_minutes = 10080
 enabled = false
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 4b -- humanitarian datasets
@@ -532,7 +511,6 @@ licence = "Per underlying dataset (mostly CC BY / IGO)."
 usage_notes = "Needs an app_identifier (generated via the API). Indicators carry reference periods -- keep them."
 poll_minutes = 1440
 enabled = false
-verified = false
 
 [[source]]
 id = "unhcr_refugee_stats"
@@ -552,7 +530,6 @@ licence = "CC BY 4.0 (check per dataset)."
 usage_notes = "Not a high-frequency backend: fetch rarely and cache locally."
 poll_minutes = 43200
 enabled = false
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 5 -- economic & sanctions
@@ -575,7 +552,6 @@ licence = "CC BY 4.0."
 usage_notes = "Store reference year AND retrieval date. Not news."
 poll_minutes = 43200
 enabled = false
-verified = false
 
 [[source]]
 id = "imf_data"
@@ -595,7 +571,6 @@ licence = "IMF terms of use."
 usage_notes = "IMF migrated its data portal; check the current SDMX endpoint before implementing."
 poll_minutes = 43200
 enabled = false
-verified = false
 
 [[source]]
 id = "eurostat"
@@ -615,7 +590,6 @@ licence = "EU reuse policy (CC BY 4.0)."
 usage_notes = "JSON-stat responses; keep reference period + release date."
 poll_minutes = 43200
 enabled = false
-verified = false
 
 [[source]]
 id = "ofac_sls"
@@ -635,7 +609,6 @@ licence = "Public domain (US government)."
 usage_notes = "Track CHANGES between list versions (additions/removals), not just the list. Lists name individuals: store only what analysis needs."
 poll_minutes = 1440
 enabled = false
-verified = false
 
 [[source]]
 id = "eu_sanctions_fsf"
@@ -655,7 +628,6 @@ licence = "EU reuse policy."
 usage_notes = "XML/CSV via data.europa.eu (download URL includes a token shown on the page). The EU Sanctions Map (sanctionsmap.eu) is the human-readable view."
 poll_minutes = 1440
 enabled = false
-verified = false
 
 # ---------------------------------------------------------------------------
 # PRIORITY 6 -- geospatial (later phase)
@@ -678,7 +650,6 @@ licence = "NASA open data."
 usage_notes = "Thermal anomaly != attack. Agricultural burning, gas flares and industry dominate. Context required."
 poll_minutes = 360
 enabled = false
-verified = false
 
 [[source]]
 id = "copernicus"
@@ -698,4 +669,3 @@ licence = "Copernicus open licence."
 usage_notes = "Manual / on-demand analysis, not automated polling."
 poll_minutes = 0
 enabled = false
-verified = false
