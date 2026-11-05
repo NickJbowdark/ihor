@@ -28,6 +28,11 @@ CLAIM_TYPES = {
     "CONTEXT",           # background from model knowledge; UNSOURCED, must be verified by an analyst
 }
 CONFIDENCE_LEVELS = {"low", "moderate", "high"}
+# Sections of an EVENT analysis and of a REPORT synthesis.
+EVENT_SECTIONS = ("significance", "key_developments", "actors", "background", "source_comparison",
+                  "implications", "uncertainty", "indicators")
+REPORT_SECTIONS = ("executive_summary", "regional_overview", "trends", "implications", "indicators", "uncertainty")
+ALL_SECTIONS = set(EVENT_SECTIONS) | set(REPORT_SECTIONS)
 
 
 def doc_ref(document_id: int) -> str:
@@ -104,11 +109,13 @@ class AnalysisRequest:
     window_end: str
     events: tuple[EventBundle, ...]
     contract_version: str = CONTRACT_VERSION
+    archive: tuple[EventBundle, ...] = ()   # earlier events retrieved from the GIM archive (RAG)
+    scope: str = "{}"                       # JSON: report type, regions, countries, topic
 
     def evidence_index(self) -> dict[str, str]:
-        """All citable ids -> text (doc refs map to title + summary)."""
+        """All citable ids -> text (doc refs map to title + summary). Includes archive evidence."""
         index: dict[str, str] = {}
-        for ev in self.events:
+        for ev in self.events + self.archive:
             for d in ev.documents:
                 index[d.ref] = f"{d.title}\n{d.summary}"
             for x in ev.excerpts:
@@ -131,6 +138,24 @@ class Claim:
     attributed_to: str | None = None
     confidence: str | None = None
     quote: str | None = None                                # must be verbatim from a cited source
+    section: str = "key_developments"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Claim":
+        """Tolerant constructor for model output: unknown keys are ignored, types coerced."""
+        refs = data.get("source_refs") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        return cls(
+            text=str(data.get("text") or "").strip(),
+            claim_type=str(data.get("claim_type") or "").strip().upper(),
+            source_refs=[str(r).strip() for r in refs if str(r).strip()],
+            event_ref=(str(data["event_ref"]).strip() if data.get("event_ref") else None),
+            attributed_to=(str(data["attributed_to"]).strip() if data.get("attributed_to") else None),
+            confidence=(str(data["confidence"]).strip().lower() if data.get("confidence") else None),
+            quote=(str(data["quote"]) if data.get("quote") else None),
+            section=str(data.get("section") or "key_developments").strip().lower(),
+        )
 
 
 @dataclass
@@ -140,12 +165,44 @@ class AnalysisResult:
     model: str
     claims: list[Claim]
     open_questions: list[str] = field(default_factory=list)
-    status: str = "draft"             # draft -> reviewed -> final (human review, Phase 3)
+    status: str = "draft"             # draft -> reviewed -> final (human review)
+    rejected: list[dict[str, Any]] = field(default_factory=list)  # statements the validator refused
+    title: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AnalysisResult":
-        claims = [Claim(**c) for c in data.get("claims", [])]
+        claims = [Claim.from_dict(c) for c in data.get("claims", []) if isinstance(c, dict)]
         return cls(data["request_id"], data["provider"], data["model"], claims, data.get("open_questions", []))
+
+
+def claim_problems(claim: Claim, index: dict[str, str], events: set[str]) -> list[str]:
+    """Deterministic checks for ONE claim. Empty list = acceptable."""
+    c = claim
+    problems: list[str] = []
+    if not c.text or len(c.text) > 2000:
+        problems.append("empty or overlong text")
+    if c.claim_type not in CLAIM_TYPES:
+        return problems + [f"unknown claim_type {c.claim_type!r}"]
+    if c.section not in ALL_SECTIONS:
+        problems.append(f"unknown section {c.section!r}")
+    unknown = [r for r in c.source_refs if r not in index]
+    if unknown:
+        problems.append(f"cites evidence that was not supplied: {unknown}")
+    if c.event_ref and c.event_ref not in events:
+        problems.append(f"unknown event {c.event_ref}")
+    if c.claim_type in ("REPORTED_FACT", "ATTRIBUTED_CLAIM") and not c.source_refs:
+        problems.append(f"{c.claim_type} without source_refs")
+    if c.claim_type == "ATTRIBUTED_CLAIM" and not c.attributed_to:
+        problems.append("ATTRIBUTED_CLAIM without attributed_to")
+    if c.claim_type == "ASSESSMENT" and c.confidence not in CONFIDENCE_LEVELS:
+        problems.append(f"ASSESSMENT needs confidence in {sorted(CONFIDENCE_LEVELS)}")
+    if c.claim_type == "CONTEXT" and c.source_refs:
+        problems.append("CONTEXT is model background knowledge and must not cite sources")
+    if c.quote:
+        cited = [index[r] for r in c.source_refs if r in index]
+        if not any(c.quote in text for text in cited):
+            problems.append("quote is not verbatim in the cited sources")
+    return problems
 
 
 def validate_result(request: AnalysisRequest, result: AnalysisResult) -> list[str]:
@@ -154,27 +211,21 @@ def validate_result(request: AnalysisRequest, result: AnalysisResult) -> list[st
     if result.request_id != request.request_id:
         problems.append("request_id does not match the request")
     index = request.evidence_index()
-    events = {e.ref for e in request.events}
+    events = {e.ref for e in request.events + request.archive}
     for i, c in enumerate(result.claims):
-        where = f"claim {i + 1}"
-        if c.claim_type not in CLAIM_TYPES:
-            problems.append(f"{where}: unknown claim_type {c.claim_type!r}")
-            continue
-        unknown = [r for r in c.source_refs if r not in index]
-        if unknown:
-            problems.append(f"{where}: cites evidence that was not supplied: {unknown}")
-        if c.event_ref and c.event_ref not in events:
-            problems.append(f"{where}: unknown event {c.event_ref}")
-        if c.claim_type in ("REPORTED_FACT", "ATTRIBUTED_CLAIM") and not c.source_refs:
-            problems.append(f"{where}: {c.claim_type} without source_refs")
-        if c.claim_type == "ATTRIBUTED_CLAIM" and not c.attributed_to:
-            problems.append(f"{where}: ATTRIBUTED_CLAIM without attributed_to")
-        if c.claim_type == "ASSESSMENT" and c.confidence not in CONFIDENCE_LEVELS:
-            problems.append(f"{where}: ASSESSMENT needs confidence in {sorted(CONFIDENCE_LEVELS)}")
-        if c.claim_type == "CONTEXT" and c.source_refs:
-            problems.append(f"{where}: CONTEXT is model background knowledge and must not cite sources")
-        if c.quote:
-            cited = [index[r] for r in c.source_refs if r in index]
-            if not any(c.quote in text for text in cited):
-                problems.append(f"{where}: quote is not verbatim in the cited sources")
+        problems += [f"claim {i + 1}: {p}" for p in claim_problems(c, index, events)]
     return problems
+
+
+def split_valid(request: AnalysisRequest, claims: list[Claim]) -> tuple[list[Claim], list[dict[str, Any]]]:
+    """(accepted claims, rejected [{claim, problems}]) -- rejected claims are kept for transparency."""
+    index = request.evidence_index()
+    events = {e.ref for e in request.events + request.archive}
+    ok, rejected = [], []
+    for c in claims:
+        p = claim_problems(c, index, events)
+        if p:
+            rejected.append({"claim": asdict(c), "problems": p})
+        else:
+            ok.append(c)
+    return ok, rejected

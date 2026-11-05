@@ -14,7 +14,7 @@ SINCE = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 @pytest.fixture
 def request_(tmp_path):
-    demo.build_demo(tmp_path / "demo.db")
+    demo.build_demo(tmp_path / "demo.db", rich=False)
     conn = db.connect(tmp_path / "demo.db")
     return build_request(conn, SINCE, live_only=False, max_events=100), conn
 

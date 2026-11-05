@@ -6,5 +6,13 @@ gatherUsageStats = false
 toolbarMode = "minimal"
 
 [server]
-# Only reachable from this computer. Change ONLY behind authentication (see docs/ARCHITECTURE.md, Phase 5).
+# Only reachable from this computer. Change ONLY behind authentication (see docs/DEPLOYMENT.md).
 address = "127.0.0.1"
+
+[theme]
+base = "dark"
+primaryColor = "#5AA9E6"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#131C2E"
+textColor = "#E6EDF7"
+font = "sans serif"

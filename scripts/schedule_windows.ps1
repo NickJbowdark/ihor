@@ -8,9 +8,17 @@
 #                (which also covers the dashboard's "Run" buttons). Exit code 3 = skipped, lock held.
 #  "GIM Backup"  daily 03:17: python -m gim.maintenance backup  (keeps the newest 14)
 #
+#  "GIM Daily Brief" (only with -DailyBrief): daily 07:43 local time:
+#                python -m gim.report --type daily_brief --pdf reports\daily\latest.pdf
+#                (uses the AI provider in .env; budget-capped; add --email in the action if SMTP is set)
+#
+#     powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1 -DailyBrief
+#
 # Remove them again with:
 #     Unregister-ScheduledTask -TaskName "GIM Ingest" -Confirm:$false
 #     Unregister-ScheduledTask -TaskName "GIM Backup" -Confirm:$false
+#     Unregister-ScheduledTask -TaskName "GIM Daily Brief" -Confirm:$false
+param([switch]$DailyBrief)
 
 $ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -29,3 +37,12 @@ Register-ScheduledTask -TaskName "GIM Backup" -Action $BackupAction -Trigger $Ba
     -Description "Global Intelligence Monitor: daily database backup" -Force | Out-Null
 
 Write-Host "Registered 'GIM Ingest' (every 30 min) and 'GIM Backup' (daily 03:17)."
+
+if ($DailyBrief) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "reports\daily") | Out-Null
+    $BriefAction  = New-ScheduledTaskAction -Execute $Python -Argument "-m gim.report --type daily_brief --pdf reports\daily\latest.pdf" -WorkingDirectory $ProjectRoot
+    $BriefTrigger = New-ScheduledTaskTrigger -Daily -At 07:43
+    Register-ScheduledTask -TaskName "GIM Daily Brief" -Action $BriefAction -Trigger $BriefTrigger -Settings $Settings `
+        -Description "Global Intelligence Monitor: daily brief (draft)" -Force | Out-Null
+    Write-Host "Registered 'GIM Daily Brief' (daily 07:43) -> reports\daily\latest.pdf"
+}

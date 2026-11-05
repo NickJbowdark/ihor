@@ -1,0 +1,15 @@
+# OPTIONAL alternative to Tailscale: public HTTPS with a login in front of the dashboard.
+# Requires a domain pointing to the server. Create the password hash with:
+#   caddy hash-password
+# Keep the dashboard's own password (GIM_DASHBOARD_PASSWORD_SHA256) enabled as a second layer.
+gim.example.org {
+    basicauth {
+        analyst <PASTE_BCRYPT_HASH_FROM_caddy_hash-password>
+    }
+    reverse_proxy 127.0.0.1:8501
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+    }
+}

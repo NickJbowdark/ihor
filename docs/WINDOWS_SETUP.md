@@ -1,7 +1,9 @@
-# Windows setup guide (Phase 1)
+# Windows installation & usage guide
 
-Every command below runs in **PowerShell** (Start menu → type "PowerShell"). Run them one at a time.
-Lines starting with `#` are explanations; don't type them.
+Every command runs in **PowerShell** (Start menu → type "PowerShell"). Run them one at a time.
+Tested assumptions: Windows 10/11, Python 3.12. Your PC (Ryzen 7 7800X3D, RTX 4070, 32 GB) is more than enough.
+
+---
 
 ## 1. Install the tools (once)
 
@@ -13,14 +15,10 @@ winget install --id Python.Python.3.12 -e
 winget install --id Git.Git -e
 ```
 
-**Close and reopen PowerShell** so it picks up the new programs, then check them:
+**Close and reopen PowerShell**, then check:
 
 ```powershell
 py -3.12 --version
-```
-
-```powershell
-git --version
 ```
 
 > No `winget`? Install Python from https://www.python.org/downloads/ (tick **"Add python.exe to PATH"**) and Git from https://git-scm.com/download/win.
@@ -43,27 +41,29 @@ cd gim
 git checkout claude/lucid-thompson-ssnima
 ```
 
-## 3. Create a virtual environment
+Already cloned earlier? Then update instead:
 
-A *virtual environment* is a private Python installation for this project, so its packages don't conflict with SpiderFoot, Maigret or anything else on your PC.
+```powershell
+git pull
+```
+
+## 3. Virtual environment and dependencies
 
 ```powershell
 py -3.12 -m venv .venv
 ```
 
-Allow PowerShell to run the activation script (only needed once per Windows user):
+Allow PowerShell to run the activation script (once per Windows user):
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-Activate it. **You must do this every time you open a new PowerShell window for GIM.** Your prompt then starts with `(.venv)`:
+Activate it. **Do this in every new PowerShell window**; the prompt then starts with `(.venv)`:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
-
-## 4. Install GIM and its dependencies
 
 ```powershell
 python -m pip install --upgrade pip
@@ -73,10 +73,7 @@ python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-`-e` ("editable") means Python uses the code in `src\gim` directly, so your edits take effect without reinstalling.
-`[dev]` also installs `pytest` for the tests.
-
-## 5. Configure
+## 4. Configuration
 
 ```powershell
 Copy-Item .env.example .env
@@ -86,95 +83,177 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-Change `GIM_USER_AGENT` so its contact URL points to your GitHub repo. That tells data providers who is calling them.
+At minimum, set `GIM_USER_AGENT` (your contact URL). The AI section is covered in step 8.
 
-## 6. Verify the installation
+## 5. Check the installation
 
 ```powershell
 python -m pytest
 ```
 
-Expected result: all tests pass (`79 passed, 1 skipped` in Phase 2.1). If anything fails, stop here and fix it first (see Troubleshooting).
+Expected: all tests pass (`111 passed, 1 skipped`; the skipped test waits for real recorded responses).
 
-## 7. First real collection
-
-One region first, to see it work:
+## 6. See the complete application immediately (demo, synthetic data)
 
 ```powershell
-python -m gim.ingest --region europe --timespan 24h
-```
-
-You should see a small table, e.g. `europe   250   250   ok`. Then all regions:
-
-```powershell
-python -m gim.ingest
-```
-
-This takes ~30 s on purpose: GIM waits ≥ 6 s between requests to respect GDELT's rate limit.
-
-Other examples:
-
-```powershell
-python -m gim.ingest --region africa --timespan 7d --topic "ceasefire,peace talks"
+python -m gim.demo
 ```
 
 ```powershell
-python -m gim.ingest --help
+$env:GIM_DB_PATH="data/demo.sqlite3"; streamlit run app/dashboard.py
 ```
 
-### Phase 2: validate sources, then collect (recommended)
+Your browser opens at http://localhost:8501. Every page shows a red **SYNTHETIC DATA** banner, and every headline starts with `[SYNTHETIC]` or `[TEST FIXTURE]`. This lets you explore everything: maps, the country monitor, the event explorer, report generation with PDF export, and alerts. It is not real intelligence.
+
+Stop with `Ctrl+C`. Return to your real database in the same window:
+
+```powershell
+Remove-Item Env:GIM_DB_PATH
+```
+
+## 7. Real data: validate and collect sources
+
+```powershell
+python -m gim.maintenance backup
+```
 
 ```powershell
 python -m gim.validate --record
 ```
+
+This checks every enabled source against the real internet and writes a report to `reports\validation\`. Details and outcome meanings are in [PHASE2_1_RELIABILITY.md §4](PHASE2_1_RELIABILITY.md#4-windows-testing-real-sources-step-by-step).
 
 ```powershell
 python -m gim.collect --force
 ```
 
 ```powershell
-python -m gim.collect --status
-```
-
-See [PHASE2_1_RELIABILITY.md §4](PHASE2_1_RELIABILITY.md#4-windows-testing-real-sources-step-by-step) for testing every source, reading the report, and restoring backups.
-
-## 8. Open the dashboard
-
-```powershell
 streamlit run app/dashboard.py
 ```
 
-Your browser opens at http://localhost:8501. Stop the dashboard with `Ctrl+C` in PowerShell.
+## 8. Enable AI analysis (choose one)
 
-## 9. (Optional) Automatic collection
+### Option A: DeepSeek API (cheap, best quality on your budget)
+1. Create an account and API key at https://platform.deepseek.com.
+2. Copy the **exact model id** and the **prices** from https://api-docs.deepseek.com (GIM never guesses them).
+3. In `.env`:
+
+```
+GIM_LLM_PROVIDER=deepseek
+GIM_LLM_MODEL=<model id from the docs>
+GIM_LLM_API_KEY=<your key>
+GIM_LLM_PRICE_INPUT_PER_M=<USD per 1M input tokens>
+GIM_LLM_PRICE_OUTPUT_PER_M=<USD per 1M output tokens>
+GIM_LLM_MONTHLY_BUDGET_USD=5
+```
+
+### Option B: Ollama (local, free, runs on your RTX 4070)
+1. Install from https://ollama.com and pull a model that fits 12 GB VRAM (roughly 7–14 B parameters, 4-bit), for example a current Qwen, Gemma, Mistral or Llama model:
+
+```powershell
+ollama pull <model-name>
+```
+
+```powershell
+ollama list
+```
+
+2. In `.env`:
+
+```
+GIM_LLM_PROVIDER=ollama
+GIM_LLM_MODEL=<name exactly as shown by ollama list>
+```
+
+Local models of this size follow the strict JSON and citation rules less reliably. GIM's validator rejects their bad citations, so expect more rejected statements than with DeepSeek.
+
+### Test it
+Restart the dashboard → **Settings & System** → *Test AI connection*. Or from the command line:
+
+```powershell
+python -m gim.analyse --top 3 --days 2
+```
+
+## 9. Daily use
+
+| Task | Where |
+|---|---|
+| World situation, top developments, regional pulse | **Global Overview** |
+| One country or region over time, generate its report | **Country & Region Monitor** |
+| Search the archive, inspect sources, run AI analysis, set event location | **Event Explorer** |
+| Daily brief / weekly assessment / country profile / conflict / diplomatic / custom brief, PDF | **Intelligence Reports** |
+| Watchlists and transparent alerts | **Alerts & Watchlists** |
+| Source status, verification, errors | **Source Health** |
+| AI budget, database, backups | **Settings & System** |
+
+Command-line equivalents:
+
+```powershell
+python -m gim.report --type daily_brief --pdf reports\daily.pdf
+```
+
+```powershell
+python -m gim.report --type country_profile --country Sudan --days 30 --pdf reports\sudan.pdf
+```
+
+```powershell
+python -m gim.report --type custom_topic --topic "Black Sea shipping" --days 60
+```
+
+```powershell
+python -m gim.alerts
+```
+
+## 10. Automation (Windows Task Scheduler)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1
 ```
 
-Check it in *Task Scheduler* → "GIM Ingest". It runs `python -m gim.collect` every 30 minutes, and each source is fetched only when its own poll interval has passed. A second task, "GIM Backup", backs up the database daily. Runs happen only while the PC is on.
+This registers collection every 30 min and a daily backup. To add a daily brief PDF at 07:43:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1 -DailyBrief
+```
+
+Tasks run only while the PC is on. For 24/7 operation see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## 11. Updating later
+
+```powershell
+git pull
+```
+
+```powershell
+pip install -e ".[dev]"
+```
+
+```powershell
+python -m pytest
+```
+
+Database schema upgrades run automatically and write a backup first (`data\backups\*-pre-v*`).
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Database | `data\gim.sqlite3` (back it up by copying it while nothing is running) |
-| Logs | `logs\gim.jsonl` (one JSON object per line, credentials redacted) |
+| Database | `data\gim.sqlite3` · demo: `data\demo.sqlite3` |
 | Backups | `data\backups\` (`python -m gim.maintenance list`) |
+| Logs | `logs\gim.jsonl` (credentials redacted) |
 | Validation reports | `reports\validation\` |
 | Source registry | `config\sources.toml` |
 | Regions / search terms | `src\gim\regions.py` |
-| Category keywords | `src\gim\pipeline\classify.py` |
-
-To inspect the database directly, install the free [DB Browser for SQLite](https://sqlitebrowser.org/).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `Activate.ps1 cannot be loaded because running scripts is disabled` | Run the `Set-ExecutionPolicy` command in step 3. |
-| `ModuleNotFoundError: No module named 'gim'` | The venv isn't active (no `(.venv)` in the prompt), or step 4 was skipped. |
-| `GDELT rejected the query: ...` | A search term in `regions.py` is invalid (e.g. a word that is too short, like "EU"). The message says which rule was broken. |
-| `GDELT unavailable (HTTP 429)` | Too many requests. Wait a few minutes and don't lower `GIM_GDELT_MIN_INTERVAL_S`. |
-| `Skipped: another collection is already running` | Another collector (scheduler or dashboard) holds the lock. It expires automatically after 30 min if that run crashed. |
-| `py` not found | Reinstall Python with "Add to PATH" ticked, then reopen PowerShell. |
+| `Activate.ps1 cannot be loaded` | Run the `Set-ExecutionPolicy` command in step 3 |
+| `ModuleNotFoundError: No module named 'gim'` | Venv not active, or step 3 skipped |
+| Map shows no countries | The browser loads map outlines from `cdn.plot.ly`; check your internet connection or ad-blocker |
+| "AI not configured" | See step 8; Settings & System lists exactly what is missing |
+| `monthly AI budget … would be exceeded` | Working as intended. Raise `GIM_LLM_MONTHLY_BUDGET_USD` or wait for next month |
+| `Skipped: another collection is already running` | Lock held by the scheduler or the dashboard; it expires after 30 min if that run crashed |
+| `GDELT rejected the query` | A term in `regions.py` is invalid (e.g. too short) |
+| Red SYNTHETIC banner although you expect real data | `GIM_DB_PATH` still points to the demo DB: `Remove-Item Env:GIM_DB_PATH` |

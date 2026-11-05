@@ -1,0 +1,12 @@
+# /etc/systemd/system/gim-daily-brief.service
+# Generates the daily brief (AI provider from .env, budget-capped) and e-mails it if SMTP is configured.
+[Unit]
+Description=GIM daily intelligence brief
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=gim
+WorkingDirectory=/opt/gim
+EnvironmentFile=/opt/gim/.env
+ExecStart=/opt/gim/.venv/bin/python -m gim.report --type daily_brief --pdf /opt/gim/reports/daily/latest.pdf --email

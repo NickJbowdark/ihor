@@ -1,0 +1,23 @@
+# /etc/systemd/system/gim-dashboard.service
+# Streamlit dashboard, bound to 127.0.0.1 only. Reach it through Tailscale (`tailscale serve`)
+# or the Caddy reverse proxy -- never expose port 8501 directly.
+[Unit]
+Description=GIM dashboard (Streamlit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=gim
+WorkingDirectory=/opt/gim
+EnvironmentFile=/opt/gim/.env
+ExecStart=/opt/gim/.venv/bin/streamlit run app/dashboard.py --server.address 127.0.0.1 --server.port 8501 --server.headless true
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/gim/data /opt/gim/logs /opt/gim/reports
+
+[Install]
+WantedBy=multi-user.target

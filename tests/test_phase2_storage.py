@@ -133,7 +133,7 @@ def test_due_and_planned(tmp_path):
 
 def test_demo_builder(tmp_path, monkeypatch):
     from gim import demo
-    n = demo.build_demo(tmp_path / "demo.db")
+    n = demo.build_demo(tmp_path / "demo.db", rich=False)
     conn = db.connect(tmp_path / "demo.db")
     rows = db.query_documents(conn, datetime(2000, 1, 1, tzinfo=timezone.utc))
     assert n == len(rows) > 10

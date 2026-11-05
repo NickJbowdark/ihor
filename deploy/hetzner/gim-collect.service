@@ -1,0 +1,19 @@
+# /etc/systemd/system/gim-collect.service -- one collection pass (sources respect their own poll intervals)
+[Unit]
+Description=GIM collection run
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=gim
+WorkingDirectory=/opt/gim
+EnvironmentFile=/opt/gim/.env
+ExecStart=/opt/gim/.venv/bin/python -m gim.collect
+# exit code 3 = another collector holds the lock: not a failure
+SuccessExitStatus=3
+TimeoutStartSec=25min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/gim/data /opt/gim/logs

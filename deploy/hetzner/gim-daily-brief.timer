@@ -1,0 +1,10 @@
+# /etc/systemd/system/gim-daily-brief.timer
+[Unit]
+Description=Daily GIM brief at 06:43 UTC
+
+[Timer]
+OnCalendar=*-*-* 06:43:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

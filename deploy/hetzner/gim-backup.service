@@ -1,0 +1,10 @@
+# /etc/systemd/system/gim-backup.service
+[Unit]
+Description=GIM database backup
+
+[Service]
+Type=oneshot
+User=gim
+WorkingDirectory=/opt/gim
+EnvironmentFile=/opt/gim/.env
+ExecStart=/opt/gim/.venv/bin/python -m gim.maintenance backup

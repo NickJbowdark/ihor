@@ -66,4 +66,5 @@ def setup_logging() -> None:
 
     # Keep third-party chatter down.
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("fontTools").setLevel(logging.WARNING)
     _CONFIGURED = True

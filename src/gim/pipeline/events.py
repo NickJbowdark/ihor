@@ -18,6 +18,9 @@ Algorithm (incremental, deterministic, explainable):
        tokens, AND compatible countries (if both name countries, at least one
        in common)                                          -> same event
   Best score wins; ties go to the older event (lower id). Otherwise a new event.
+  Anti-snowball guards: a document is compared only with members published within
+  +/- 48 h of it, and an event never spans more than 7 days (a long-running situation
+  becomes a series of events, linked through archive retrieval, not one giant event).
   Events are never merged or renumbered automatically, so EVT ids stay stable.
 
 Known limits (by design, honest): different wording for the same event
@@ -34,8 +37,9 @@ from datetime import datetime, timedelta
 from gim.pipeline.geo import tag_places
 from gim.pipeline.normalize import key_tokens
 
-CLUSTERING_METHOD = "deterministic-title-v1"
+CLUSTERING_METHOD = "deterministic-title-v2"
 WINDOW = timedelta(hours=48)
+MAX_EVENT_SPAN = timedelta(days=7)
 MIN_JACCARD = 0.5
 MIN_SHARED_TOKENS = 3
 
@@ -95,7 +99,11 @@ def choose_event(doc: ClusterDoc, events: list[ClusterEvent]) -> tuple[int | Non
     for ev in sorted(events, key=lambda e: e.id):
         if doc.timeline_at < ev.first_at - WINDOW or doc.timeline_at > ev.last_at + WINDOW:
             continue
+        if max(doc.timeline_at, ev.last_at) - min(doc.timeline_at, ev.first_at) > MAX_EVENT_SPAN:
+            continue
         for member in ev.members:
+            if abs(member.timeline_at - doc.timeline_at) > WINDOW:
+                continue
             score, method = similarity(doc, member)
             if score > 0 and (best is None or score > best[0]):
                 best = (score, ev.id, method)

@@ -114,3 +114,28 @@ def test_same_headline_different_countries_not_merged(tmp_path):
     a = ClusterDoc(1, t, "Explosion hits fuel depot near Kabul airport", "fa", frozenset({"Afghanistan"}))
     b = ClusterDoc(2, t, "Explosion hits fuel depot near Lagos airport", "fb", frozenset({"Nigeria"}))
     assert similarity(a, b)[0] == 0.0
+
+
+def test_events_do_not_snowball():
+    from datetime import timedelta
+    from gim.pipeline.events import MAX_EVENT_SPAN, ClusterDoc, ClusterEvent, choose_event
+    t0 = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    title = "Foreign ministers of Armenia and Azerbaijan meet for peace talks in Geneva"
+    member = ClusterDoc(1, t0, title, "fp1", frozenset({"Armenia", "Azerbaijan"}))
+    old_event = ClusterEvent(1, t0, t0 + MAX_EVENT_SPAN - timedelta(hours=1), [member])
+    late = ClusterDoc(2, t0 + MAX_EVENT_SPAN + timedelta(hours=1), title, "fp1", frozenset({"Armenia", "Azerbaijan"}))
+    assert choose_event(late, [old_event])[0] is None          # identical headline, but beyond the 7-day span
+    # members far away in time are not used for matching even inside the span
+    near = ClusterDoc(3, t0 + timedelta(days=3), title, "fp1", frozenset({"Armenia", "Azerbaijan"}))
+    assert choose_event(near, [ClusterEvent(1, t0, t0 + timedelta(days=3), [member])])[0] is None
+
+
+def test_rich_synthetic_corpus_is_clearly_synthetic_and_clusters_sanely(tmp_path):
+    from gim import demo
+    demo.build_demo(tmp_path / "rich.db")
+    conn = db.connect(tmp_path / "rich.db")
+    docs = db.query_documents(conn, SINCE, limit=100000)
+    assert all(d["data_origin"] == "fixture" for d in docs)
+    assert all(d["title"].startswith(("[SYNTHETIC]", "[TEST FIXTURE]")) for d in docs)
+    biggest = conn.execute("SELECT MAX(documents_count), MAX(independent_origins) FROM events").fetchone()
+    assert biggest[0] <= 8 and biggest[1] <= 6          # copies of ONE synthetic story, no snowballing

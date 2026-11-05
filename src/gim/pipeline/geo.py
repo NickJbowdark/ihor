@@ -120,3 +120,39 @@ def tag_places(text: str) -> tuple[list[str], list[str]]:
             country_hits[country] = min(pos, country_hits.get(country, pos))
         region_hits[region] = min(pos, region_hits.get(region, pos))
     return (sorted(country_hits, key=country_hits.get), sorted(region_hits, key=region_hits.get))
+
+
+# ISO 3166-1 alpha-3 codes for the canonical names above (used for maps; Kosovo uses the
+# commonly used user-assigned code XKX). Country-level codes shade a whole country -- they
+# never imply a point location.
+ISO3: dict[str, str] = {
+    "Ukraine": "UKR", "Russia": "RUS", "Belarus": "BLR", "Moldova": "MDA", "Germany": "DEU", "France": "FRA",
+    "United Kingdom": "GBR", "Poland": "POL", "Italy": "ITA", "Spain": "ESP", "Hungary": "HUN", "Romania": "ROU",
+    "Serbia": "SRB", "Kosovo": "XKX", "Bosnia and Herzegovina": "BIH", "Georgia": "GEO", "Armenia": "ARM",
+    "Azerbaijan": "AZE", "Turkey": "TUR", "Greece": "GRC", "Netherlands": "NLD", "Belgium": "BEL", "Sweden": "SWE",
+    "Finland": "FIN", "Norway": "NOR", "Denmark": "DNK", "Estonia": "EST", "Latvia": "LVA", "Lithuania": "LTU",
+    "Czech Republic": "CZE", "Slovakia": "SVK", "Austria": "AUT", "Switzerland": "CHE", "Ireland": "IRL",
+    "Portugal": "PRT", "Bulgaria": "BGR", "Croatia": "HRV", "Albania": "ALB", "North Macedonia": "MKD",
+    "Montenegro": "MNE", "Cyprus": "CYP", "Iran": "IRN", "Israel": "ISR", "Palestine": "PSE", "Lebanon": "LBN",
+    "Syria": "SYR", "Iraq": "IRQ", "Saudi Arabia": "SAU", "Yemen": "YEM", "Jordan": "JOR", "Egypt": "EGY",
+    "Qatar": "QAT", "United Arab Emirates": "ARE", "Kuwait": "KWT", "Oman": "OMN", "Bahrain": "BHR",
+    "Sudan": "SDN", "South Sudan": "SSD", "Ethiopia": "ETH", "Eritrea": "ERI", "Somalia": "SOM", "Kenya": "KEN",
+    "Mali": "MLI", "Burkina Faso": "BFA", "Niger": "NER", "Nigeria": "NGA", "Chad": "TCD",
+    "Democratic Republic of the Congo": "COD", "Libya": "LBY", "Algeria": "DZA", "Morocco": "MAR",
+    "Tunisia": "TUN", "Senegal": "SEN", "Ghana": "GHA", "Cameroon": "CMR", "Mozambique": "MOZ",
+    "South Africa": "ZAF", "Uganda": "UGA", "Rwanda": "RWA", "Central African Republic": "CAF",
+    "Zimbabwe": "ZWE", "Guinea": "GIN", "China": "CHN", "Taiwan": "TWN", "India": "IND", "Pakistan": "PAK",
+    "Afghanistan": "AFG", "Japan": "JPN", "North Korea": "PRK", "South Korea": "KOR", "Philippines": "PHL",
+    "Vietnam": "VNM", "Indonesia": "IDN", "Malaysia": "MYS", "Thailand": "THA", "Myanmar": "MMR",
+    "Bangladesh": "BGD", "Sri Lanka": "LKA", "Nepal": "NPL", "Cambodia": "KHM", "Australia": "AUS",
+    "New Zealand": "NZL", "Kazakhstan": "KAZ", "Uzbekistan": "UZB", "Mongolia": "MNG", "Singapore": "SGP",
+    "United States": "USA", "Canada": "CAN", "Mexico": "MEX", "Brazil": "BRA", "Argentina": "ARG",
+    "Venezuela": "VEN", "Colombia": "COL", "Cuba": "CUB", "Haiti": "HTI", "Peru": "PER", "Chile": "CHL",
+    "Bolivia": "BOL", "Ecuador": "ECU", "Nicaragua": "NIC", "Panama": "PAN", "Guatemala": "GTM",
+    "Honduras": "HND", "El Salvador": "SLV",
+}
+COUNTRY_REGION: dict[str, str] = {c: r for r, cs in GAZETTEER.items() for c in cs}
+
+
+def all_countries() -> list[str]:
+    return sorted(COUNTRY_REGION)

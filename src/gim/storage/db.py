@@ -15,6 +15,9 @@ Schema history
   v3 (Phase 2.1): documents.source_country -> publisher_country, countries -> countries_mentioned;
                 events + event_documents; source_validations; locks; run metrics
                 (duplicates, duration, http status, error kind); source backoff/empty counters.
+  v4 (Phase 3): event statistics columns (categories, regions, organizations, counts,
+                corroboration level, prominence); FTS5 full-text archive over documents;
+                watchlists, alerts, llm_calls (cost ledger), event_analyses (AI cache), reports.
 
 Migration safety
   * Before upgrading an EXISTING database file, a full copy is written to
@@ -39,7 +42,7 @@ from typing import Any, Iterator
 from gim.config import get_settings
 from gim.models import Article, Document
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_V2 = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -200,6 +203,110 @@ CREATE TABLE IF NOT EXISTS locks (
 );
 """
 
+V3_TO_V4 = """
+ALTER TABLE events ADD COLUMN categories TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN regions TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN organizations TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN documents_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN publishers_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN independent_origins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN official_origins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN corroboration_level TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN prominence REAL NOT NULL DEFAULT 0;   -- transparent ranking formula, see pipeline/prominence.py
+ALTER TABLE events ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'live';
+CREATE INDEX IF NOT EXISTS idx_events_prominence ON events(prominence);
+
+-- Full-text archive (BM25 ranking) over all documents, kept in sync by triggers.
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    title, summary, content='documents', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS documents_fts_ai AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, title, summary) VALUES (new.id, new.title, new.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS documents_fts_ad AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, summary) VALUES ('delete', old.id, old.title, old.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS documents_fts_au AFTER UPDATE OF title, summary ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, summary) VALUES ('delete', old.id, old.title, old.summary);
+    INSERT INTO documents_fts(rowid, title, summary) VALUES (new.id, new.title, new.summary);
+END;
+INSERT INTO documents_fts(documents_fts) VALUES ('rebuild');
+
+CREATE TABLE IF NOT EXISTS watchlists (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL,      -- country | region | keyword | organization | source
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    active     INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (kind, value)
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id              INTEGER PRIMARY KEY,
+    rule            TEXT NOT NULL,     -- volume_spike | watchlist_match | official_statement | multi_origin_event
+    severity        TEXT NOT NULL,     -- info | notice | warning
+    title           TEXT NOT NULL,
+    detail          TEXT NOT NULL,
+    criteria        TEXT NOT NULL,     -- JSON: the exact numbers / rule that fired (transparency)
+    event_id        INTEGER REFERENCES events(id),
+    document_id     INTEGER REFERENCES documents(id),
+    created_at      TEXT NOT NULL,
+    dedup_key       TEXT NOT NULL UNIQUE,
+    acknowledged_at TEXT,
+    data_origin     TEXT NOT NULL DEFAULT 'live'
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
+
+-- Every AI call: the cost ledger behind the monthly budget cap.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id            INTEGER PRIMARY KEY,
+    at            TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    purpose       TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    duration_ms   INTEGER,
+    ok            INTEGER NOT NULL,
+    error         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(at);
+
+-- Cached per-event AI analyses (key = event content + provider + model + prompt version).
+CREATE TABLE IF NOT EXISTS event_analyses (
+    id             INTEGER PRIMARY KEY,
+    event_id       INTEGER NOT NULL REFERENCES events(id),
+    cache_key      TEXT NOT NULL UNIQUE,
+    provider       TEXT NOT NULL,
+    model          TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    content        TEXT NOT NULL,      -- JSON: accepted claims, sections
+    rejected       TEXT NOT NULL DEFAULT '[]'   -- JSON: model statements the validator rejected
+);
+CREATE INDEX IF NOT EXISTS idx_event_analyses_event ON event_analyses(event_id);
+
+CREATE TABLE IF NOT EXISTS reports (
+    id           INTEGER PRIMARY KEY,
+    report_type  TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    scope        TEXT NOT NULL,       -- JSON: regions / countries / topic
+    window_start TEXT NOT NULL,
+    window_end   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'draft',   -- draft | reviewed | final
+    provider     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    content      TEXT NOT NULL,       -- JSON report structure
+    markdown     TEXT NOT NULL,
+    data_origin  TEXT NOT NULL DEFAULT 'live',    -- live | fixture | mixed
+    reviewer_note TEXT,
+    reviewed_at  TEXT
+);
+"""
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -317,6 +424,12 @@ def init_db(conn: sqlite3.Connection, path: Path | None = None, backup_dir: Path
         with _migration_step(conn, 3):
             for stmt in _statements(V2_TO_V3):
                 conn.execute(stmt)
+    if version < 4:
+        with _migration_step(conn, 4):
+            for stmt in _statements(V3_TO_V4):
+                conn.execute(stmt)
+            for (event_id,) in conn.execute("SELECT id FROM events").fetchall():
+                refresh_event(conn, event_id)
 
 
 def _migrate_v1_rows(conn: sqlite3.Connection) -> None:
@@ -510,23 +623,48 @@ def link_event_document(conn: sqlite3.Connection, event_id: int, document_id: in
 
 
 def refresh_event(conn: sqlite3.Connection, event_id: int) -> None:
-    """Recompute time span, headline (earliest member) and mentioned countries."""
-    docs = conn.execute(
-        """SELECT d.timeline_at, d.title, d.countries_mentioned FROM documents d
-           JOIN event_documents ed ON ed.document_id = d.id WHERE ed.event_id = ? ORDER BY d.timeline_at, d.id""",
-        (event_id,)).fetchall()
+    """Recompute an event's derived fields from its member documents.
+
+    headline = earliest member's title; categories/regions/organizations = union over members;
+    counts and corroboration from pipeline.corroboration; prominence from pipeline.prominence.
+    """
+    from gim.pipeline.actors import tag_organizations
+    from gim.pipeline.corroboration import summarise
+    from gim.pipeline.prominence import prominence
+
+    docs = [dict(r) for r in conn.execute(
+        """SELECT d.*, (SELECT GROUP_CONCAT(region) FROM document_regions WHERE document_id = d.id) AS regions
+           FROM documents d JOIN event_documents ed ON ed.document_id = d.id
+           WHERE ed.event_id = ? ORDER BY d.timeline_at, d.id""", (event_id,))]
     if not docs:
         return
-    countries: list[str] = []
+
+    def union(key: str) -> list[str]:
+        out: list[str] = []
+        for d in docs:
+            for v in (d.get(key) or "").split(","):
+                if v and v not in out:
+                    out.append(v)
+        return out
+
+    orgs: list[str] = []
     for d in docs:
-        for c in (d["countries_mentioned"] or "").split(","):
-            if c and c not in countries:
-                countries.append(c)
+        for o in tag_organizations(f"{d['title']} {d['summary']}"):
+            if o not in orgs:
+                orgs.append(o)
+    summary = summarise(docs)
+    categories = union("categories")
+    origins = {d["data_origin"] for d in docs}
     conn.execute(
         """UPDATE events SET first_published_at=?, last_published_at=?, headline=?, countries_mentioned=?,
+               categories=?, regions=?, organizations=?, documents_count=?, publishers_count=?,
+               independent_origins=?, official_origins=?, corroboration_level=?, prominence=?, data_origin=?,
                updated_at=? WHERE id=?""",
-        (docs[0]["timeline_at"], docs[-1]["timeline_at"], docs[0]["title"], ",".join(countries), utcnow_iso(),
-         event_id))
+        (docs[0]["timeline_at"], docs[-1]["timeline_at"], docs[0]["title"], ",".join(union("countries_mentioned")),
+         ",".join(categories), ",".join(union("regions")), ",".join(orgs), summary.documents, summary.publishers,
+         summary.independent_origins, summary.official_origins, summary.level,
+         prominence(summary.independent_origins, summary.official_origins, summary.documents, categories),
+         origins.pop() if len(origins) == 1 else "mixed", utcnow_iso(), event_id))
 
 
 def set_event_location(conn: sqlite3.Connection, event_id: int, *, event_country: str | None,
@@ -547,9 +685,21 @@ def set_event_location(conn: sqlite3.Connection, event_id: int, *, event_country
 
 def query_events(conn: sqlite3.Connection, since: datetime, until: datetime | None = None,
                  regions: list[str] | None = None, text: str | None = None,
-                 data_origins: list[str] | None = None, limit: int = 2000) -> list[dict[str, Any]]:
+                 data_origins: list[str] | None = None, limit: int = 2000, *,
+                 countries: list[str] | None = None, categories: list[str] | None = None,
+                 organizations: list[str] | None = None, source_ids: list[str] | None = None,
+                 min_origins: int = 0, order: str = "recent") -> list[dict[str, Any]]:
+    """Events overlapping [since, until]. order: recent | prominence."""
     where = ["e.last_published_at >= ?"]
     params: list[Any] = [to_iso(since)]
+    for column, values in (("countries_mentioned", countries), ("categories", categories),
+                           ("organizations", organizations)):
+        if values:
+            where.append("(" + " OR ".join(f"(',' || e.{column} || ',') LIKE ?" for _ in values) + ")")
+            params.extend(f"%,{v},%" for v in values)
+    if min_origins:
+        where.append("(e.independent_origins + e.official_origins) >= ?")
+        params.append(int(min_origins))
     if until:
         where.append("e.first_published_at <= ?")
         params.append(to_iso(until))
@@ -560,6 +710,9 @@ def query_events(conn: sqlite3.Connection, since: datetime, until: datetime | No
     if data_origins:
         member_filter.append(f"d.data_origin IN ({','.join('?' * len(data_origins))})")
         params.extend(data_origins)
+    if source_ids:
+        member_filter.append(f"d.id IN (SELECT document_id FROM document_sources WHERE source_id IN ({','.join('?' * len(source_ids))}))")
+        params.extend(source_ids)
     if text:
         escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         member_filter.append("(d.title LIKE ? ESCAPE '\\' OR d.summary LIKE ? ESCAPE '\\')")
@@ -568,12 +721,9 @@ def query_events(conn: sqlite3.Connection, since: datetime, until: datetime | No
         where.append("e.id IN (SELECT ed.event_id FROM event_documents ed JOIN documents d ON d.id = ed.document_id"
                      " WHERE " + " AND ".join(member_filter) + ")")
     sql = f"""
-        SELECT e.*,
-               (SELECT COUNT(*) FROM event_documents WHERE event_id = e.id) AS documents,
-               (SELECT COUNT(DISTINCT d.publisher) FROM event_documents ed JOIN documents d ON d.id = ed.document_id
-                 WHERE ed.event_id = e.id) AS publishers
+        SELECT e.*, e.documents_count AS documents, e.publishers_count AS publishers
         FROM events e WHERE {' AND '.join(where)}
-        ORDER BY e.last_published_at DESC, e.id DESC LIMIT ?"""
+        ORDER BY {"e.prominence DESC, " if order == "prominence" else ""}e.last_published_at DESC, e.id DESC LIMIT ?"""
     params.append(int(limit))
     return [dict(r) for r in conn.execute(sql, params)]
 

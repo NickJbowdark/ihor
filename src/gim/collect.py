@@ -247,6 +247,11 @@ def collect(source_ids: list[str] | None = None, *, force: bool = False, dry_run
         if not dry_run:
             stats = assign_events(conn)
             log.info("Event assignment: %s", stats, extra=stats)
+            from gim.alerts import evaluate as evaluate_alerts  # local import: alerts -> storage only
+            try:
+                log.info("Alerts: %d new", evaluate_alerts(conn))
+            except Exception:  # alerts must never break collection
+                log.exception("Alert evaluation failed")
         return results
     finally:
         if locked:

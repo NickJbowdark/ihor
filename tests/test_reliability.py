@@ -51,10 +51,10 @@ def test_v2_to_v3_migration_keeps_data_and_backs_up(tmp_path):
     path = tmp_path / "gim.sqlite3"
     _make_v2(path)
     conn = db.connect(path, backup_dir=tmp_path / "bk")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     row = conn.execute("SELECT publisher_country, countries_mentioned FROM documents").fetchone()
     assert tuple(row) == ("France", "Sudan,Chad")
-    backups = list((tmp_path / "bk").glob("*-pre-v3-from-v2-*.sqlite3"))
+    backups = list((tmp_path / "bk").glob(f"*-pre-v{db.SCHEMA_VERSION}-from-v2-*.sqlite3"))
     assert len(backups) == 1
     assert sqlite3.connect(backups[0]).execute("PRAGMA user_version").fetchone()[0] == 2
 
