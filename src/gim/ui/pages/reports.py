@@ -70,7 +70,8 @@ def _generate(conn, synthetic: bool) -> None:
             return
         bar.empty()
         st.session_state["selected_report"] = rid
-        st.success(f"Report #{rid} created as DRAFT. Open it in the library below.")
+        st.success(f"Report #{rid} created as DRAFT (also listed in the report library).")
+        _show_report(conn, rid, key="new")
 
 
 def _library(conn) -> None:
@@ -88,7 +89,18 @@ def _library(conn) -> None:
                        column_config={"title": st.column_config.TextColumn(width="large")})
     if sel.selection.rows:
         st.session_state["selected_report"] = int(df.iloc[sel.selection.rows[0]]["id"])
-    rid = st.session_state.get("selected_report") or int(df.iloc[0]["id"])
+    _show_report(conn, st.session_state.get("selected_report") or int(df.iloc[0]["id"]))
+
+
+@st.cache_data(max_entries=20, show_spinner=False)
+def _pdf_bytes(rid: int, status: str, content_json: str) -> bytes:
+    """PDF rendering is the slowest step of the page: cache it per report + status."""
+    content = json.loads(content_json)
+    content["status"] = status
+    return render_pdf(content)
+
+
+def _show_report(conn, rid: int, key: str = "lib") -> None:
     rep = intel.get_report(conn, rid)
     if not rep:
         return
@@ -99,14 +111,15 @@ def _library(conn) -> None:
     h1.markdown(f"{ui.badge(rep['status'].upper(), STATUS_COLOURS.get(rep['status'], '#888'))}"
                 f"{ui.badge(rep['data_origin'], theme.RED if rep['data_origin'] != 'live' else theme.GREEN)}"
                 f"<span class='gim-muted'> report #{rid}</span>", unsafe_allow_html=True)
-    h2.download_button("⬇ PDF", render_pdf(content), f"gim_report_{rid}.pdf", "application/pdf",
-                       width="stretch")
+    h2.download_button("⬇ PDF", _pdf_bytes(rid, rep["status"], rep["content"]), f"gim_report_{rid}.pdf",
+                       "application/pdf", width="stretch", key=f"{key}_pdf_{rid}")
     h3.download_button("⬇ Markdown", rep["markdown"].encode("utf-8"), f"gim_report_{rid}.md", "text/markdown",
-                       width="stretch")
+                       width="stretch", key=f"{key}_md_{rid}")
     with h4.popover("Review", width="stretch"):
-        note = st.text_area("Reviewer note", value=rep.get("reviewer_note") or "")
-        new = st.radio("Status", ["draft", "reviewed", "final"], index=["draft", "reviewed", "final"].index(rep["status"]))
-        if st.button("Save review"):
+        note = st.text_area("Reviewer note", value=rep.get("reviewer_note") or "", key=f"{key}_note_{rid}")
+        new = st.radio("Status", ["draft", "reviewed", "final"], key=f"{key}_status_{rid}",
+                       index=["draft", "reviewed", "final"].index(rep["status"]))
+        if st.button("Save review", key=f"{key}_save_{rid}"):
             intel.set_report_status(conn, rid, new, note)
             st.rerun()
     if rep.get("reviewer_note"):
@@ -120,8 +133,12 @@ def render() -> None:
     synthetic = ui.synthetic_banner(conn)
     ui.hero("Intelligence Reports", "Daily briefs, weekly assessments, country profiles, conflict and diplomatic "
             "analyses, custom research briefs — source-grounded drafts for analyst review")
-    tab1, tab2 = st.tabs(["Report library", "Generate new report"])
-    with tab2:
+    # Coming from "Generate report for this scope" (Monitor page): open the generator first.
+    if st.session_state.get("report_prefill"):
+        gen_tab, lib_tab = st.tabs(["Generate new report", "Report library"])
+    else:
+        lib_tab, gen_tab = st.tabs(["Report library", "Generate new report"])
+    with gen_tab:
         _generate(conn, synthetic)
-    with tab1:
+    with lib_tab:
         _library(conn)

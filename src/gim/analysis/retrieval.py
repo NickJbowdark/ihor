@@ -36,7 +36,16 @@ def related_history(conn, event: dict, k: int = 4, query: str | None = None) -> 
     anchors = _set(event.get("countries_mentioned")) | _set(event.get("organizations"))
     if anchors:
         hits = [h for h in hits if anchors & (_set(h.get("countries_mentioned")) | _set(h.get("organizations")))]
+    # Rank: more shared countries/organisations first, then text relevance (BM25: lower = better),
+    # then better-corroborated events, then the more recent one.
+    hits.sort(key=lambda h: (-len(anchors & (_set(h.get("countries_mentioned")) | _set(h.get("organizations")))),
+                             h.get("match_rank", 0.0), -(h.get("independent_origins") or 0),
+                             _neg_time(h["last_published_at"])))
     return build_event_bundles(conn, hits[:k])
+
+
+def _neg_time(iso: str) -> float:
+    return -datetime.fromisoformat(iso).timestamp()
 
 
 def _set(csv: str | None) -> set[str]:

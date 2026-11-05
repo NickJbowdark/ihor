@@ -14,9 +14,13 @@ Algorithm (incremental, deterministic, explainable):
   Documents are processed oldest first. For each document not yet in an event,
   compare it with the members of recent events (within +/- 48 h):
     1. identical headline fingerprint                     -> same event (score 1.0)
-    2. headline token similarity (Jaccard) >= 0.5 with at least 3 shared key
-       tokens, AND compatible countries (if both name countries, at least one
-       in common)                                          -> same event
+    2. headline token similarity >= 0.5 with at least 3 shared key tokens, AND
+     compatible countries (if both name countries, at least one in common)
+                                                           -> same event
+     Similarity is an IDF-WEIGHTED Jaccard: words that appear in many current
+     headlines ("talks", "minister", "says") weigh little, rare words (names,
+     places, specific nouns) weigh a lot. Without corpus statistics it falls
+     back to plain Jaccard.
   Best score wins; ties go to the older event (lower id). Otherwise a new event.
   Anti-snowball guards: a document is compared only with members published within
   +/- 48 h of it, and an event never spans more than 7 days (a long-running situation
@@ -31,13 +35,15 @@ AI checks ON TOP of this, and keeps this method as the auditable baseline.
 """
 from __future__ import annotations
 
+import math
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from gim.pipeline.geo import tag_places
 from gim.pipeline.normalize import key_tokens
 
-CLUSTERING_METHOD = "deterministic-title-v2"
+CLUSTERING_METHOD = "deterministic-title-v3"
 WINDOW = timedelta(hours=48)
 MAX_EVENT_SPAN = timedelta(days=7)
 MIN_JACCARD = 0.5
@@ -77,9 +83,27 @@ class ClusterEvent:
     first_at: datetime
     last_at: datetime
     members: list[ClusterDoc]
+    tokens: set = field(default_factory=set)        # union of member tokens (fast pre-filter)
+    fingerprints: set = field(default_factory=set)
+
+    def add(self, doc: ClusterDoc) -> None:
+        self.members.append(doc)
+        self.tokens |= doc.tokens
+        self.fingerprints.add(doc.fingerprint)
 
 
-def similarity(a: ClusterDoc, b: ClusterDoc) -> tuple[float, str]:
+class Idf:
+    """Inverse document frequency of headline tokens in the current comparison window."""
+
+    def __init__(self, token_sets: list[frozenset[str]]):
+        self.n = len(token_sets)
+        self.df = Counter(t for ts in token_sets for t in ts)
+
+    def __call__(self, token: str) -> float:
+        return math.log((self.n + 1) / (self.df.get(token, 0) + 1)) + 1.0
+
+
+def similarity(a: ClusterDoc, b: ClusterDoc, idf: Idf | None = None) -> tuple[float, str]:
     """(score, method) -- score 0 means 'not the same event'."""
     if a.fingerprint and a.fingerprint == b.fingerprint:
         return 1.0, "same_fingerprint"
@@ -89,14 +113,19 @@ def similarity(a: ClusterDoc, b: ClusterDoc) -> tuple[float, str]:
     union = a.tokens | b.tokens
     if not union or len(shared) < MIN_SHARED_TOKENS:
         return 0.0, "too_few_shared_tokens"
-    jaccard = len(shared) / len(union)
+    if idf is None:
+        jaccard = len(shared) / len(union)
+    else:
+        jaccard = sum(idf(t) for t in shared) / sum(idf(t) for t in union)
     return (round(jaccard, 3), "title_similarity") if jaccard >= MIN_JACCARD else (0.0, "below_threshold")
 
 
-def choose_event(doc: ClusterDoc, events: list[ClusterEvent]) -> tuple[int | None, str, float]:
-    """Pick the best matching event for ``doc`` or None. Deterministic."""
+def choose_event(doc: ClusterDoc, events: list[ClusterEvent], idf: Idf | None = None) -> tuple[int | None, str, float]:
+    """Pick the best matching event for ``doc`` or None. Deterministic (events in id order)."""
     best: tuple[float, int, str] | None = None
-    for ev in sorted(events, key=lambda e: e.id):
+    for ev in events:
+        if ev.tokens and doc.fingerprint not in ev.fingerprints and len(doc.tokens & ev.tokens) < MIN_SHARED_TOKENS:
+            continue  # cheap pre-filter: cannot reach the threshold
         if doc.timeline_at < ev.first_at - WINDOW or doc.timeline_at > ev.last_at + WINDOW:
             continue
         if max(doc.timeline_at, ev.last_at) - min(doc.timeline_at, ev.first_at) > MAX_EVENT_SPAN:
@@ -104,7 +133,7 @@ def choose_event(doc: ClusterDoc, events: list[ClusterEvent]) -> tuple[int | Non
         for member in ev.members:
             if abs(member.timeline_at - doc.timeline_at) > WINDOW:
                 continue
-            score, method = similarity(doc, member)
+            score, method = similarity(doc, member, idf)
             if score > 0 and (best is None or score > best[0]):
                 best = (score, ev.id, method)
     if best is None:
@@ -135,14 +164,16 @@ def assign_events(conn) -> dict[str, int]:
     for r in db.event_members_since(conn, since):
         ev = events.setdefault(r["event_id"], ClusterEvent(r["event_id"], _dt(r["first_published_at"]),
                                                            _dt(r["last_published_at"]), []))
-        ev.members.append(ClusterDoc(r["id"], _dt(r["timeline_at"]), r["title"], r["title_fingerprint"],
-                                     _countries(r["countries_mentioned"])))
+        ev.add(ClusterDoc(r["id"], _dt(r["timeline_at"]), r["title"], r["title_fingerprint"],
+                          _countries(r["countries_mentioned"])))
+    docs = [ClusterDoc(r["id"], _dt(r["timeline_at"]), r["title"], r["title_fingerprint"],
+                       _countries(r["countries_mentioned"])) for r in pending]
+    idf = Idf([d.tokens for d in docs] + [m.tokens for ev in events.values() for m in ev.members])
     new_events = linked = 0
+    touched: set[int] = set()
     with db.transaction(conn):
-        for r in pending:
-            doc = ClusterDoc(r["id"], _dt(r["timeline_at"]), r["title"], r["title_fingerprint"],
-                             _countries(r["countries_mentioned"]))
-            event_id, method, score = choose_event(doc, list(events.values()))
+        for r, doc in zip(pending, docs):
+            event_id, method, score = choose_event(doc, list(events.values()), idf)
             if event_id is None:
                 event_id = db.create_event(conn, doc.title, r["timeline_at"], CLUSTERING_METHOD)
                 events[event_id] = ClusterEvent(event_id, doc.timeline_at, doc.timeline_at, [])
@@ -151,7 +182,9 @@ def assign_events(conn) -> dict[str, int]:
                 linked += 1
             db.link_event_document(conn, event_id, doc.id, method, score)
             ev = events[event_id]
-            ev.members.append(doc)
+            ev.add(doc)
             ev.first_at, ev.last_at = min(ev.first_at, doc.timeline_at), max(ev.last_at, doc.timeline_at)
+            touched.add(event_id)
+        for event_id in sorted(touched):   # derived statistics once per event, not once per document
             db.refresh_event(conn, event_id)
     return {"documents": len(pending), "new_events": new_events, "linked": linked}

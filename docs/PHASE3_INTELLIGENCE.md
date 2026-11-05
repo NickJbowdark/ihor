@@ -106,7 +106,21 @@ python -m gim.analyse --top 10 --days 3
    - how many statements were rejected
 4. Compare against the baseline (`--no-ai`) and, if you can, a second provider. That table is the evidence for whether the model is good enough. It is also strong portfolio material.
 
-## 6. Known limitations
+## 6. Increment 3.1 (accuracy, resilience, presentation)
+
+| Area | Change | Why |
+|---|---|---|
+| Event detection | `deterministic-title-v3`: **IDF-weighted** headline similarity | Generic words ("talks", "minister") no longer merge different stories; shared rare names (places, people) count more |
+| Event detection | Pre-filter + statistics refreshed once per event | A full GDELT run (~1,250 documents) no longer does quadratic work or recomputes an event for every document |
+| AI evidence | Prompt evidence = **one document per origin first** (officials and original reporting preferred), plus an explicit origin map (which DOCs are copies of which) | Large events made of wire copies no longer crowd out the independent reports; the model sees who actually produced the information |
+| Historical context | Related earlier events ranked by shared countries/organisations, then text relevance, corroboration and recency | More relevant archive context |
+| Resilience | A failed repair round keeps the valid first answer; an AI failure on one event, a hit budget cap, or a failed synthesis falls back to the baseline **and is stated in the report's limitations**; empty AI answers are not cached | One provider error no longer aborts a whole report |
+| Reports | **Key judgments** (assessments, highest confidence first), **Events covered** table, **Changes compared with the previous period** (same scope, deterministic), **Source base** (types, institutions, publishers, languages); change data is also given to the model for the trends section | Professional brief structure; regional pattern changes are grounded in counts |
+| Dashboard | "Generate report for this scope" opens the generator pre-filled; new reports display immediately; PDFs cached; overview activity aggregated in SQL; region filter uses event statistics | Usability and speed on large databases |
+
+Prompt version is now `gim-prompts/1.1`, so earlier cached analyses are recomputed on demand rather than mixed with new ones.
+
+## 7. Known limitations
 
 - Retrieval is lexical (FTS5); semantic embeddings are a Phase 6 upgrade.
 - Event grouping compares headlines only (`deterministic-title-v2`, with anti-snowball guards: ±48 h member window, 7-day max span).

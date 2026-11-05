@@ -135,12 +135,9 @@ def render() -> None:
     a, b = st.columns([2, 1])
     with a:
         st.markdown("### Activity")
-        docs = data.documents(key, days)
-        if not docs.empty:
-            freq = "h" if days <= 2 else "D"
-            act = (docs.assign(topic=docs["categories"].replace("", "unclassified").str.split(",").str[0])
-                   .groupby([pd.Grouper(key="timeline_at", freq=freq), "topic"]).size().reset_index(name="documents"))
-            fig = px.area(act, x="timeline_at", y="documents", color="topic", height=300,
+        act = data.activity(key, days)
+        if not act.empty:
+            fig = px.area(act, x="period", y="documents", color="topic", height=300,
                           color_discrete_map=theme.CATEGORY_COLOURS)
             fig.update_layout(xaxis_title="", legend_title_text="")
             st.plotly_chart(fig, width="stretch")

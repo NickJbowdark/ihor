@@ -51,3 +51,18 @@ def test_sources_pages_render(demo_db, monkeypatch):
             assert not at.exception, [e.value for e in at.exception]
     finally:
         get_settings.cache_clear()
+
+
+def test_reports_page_opens_generator_with_prefill(demo_db, monkeypatch):
+    monkeypatch.setenv("GIM_DB_PATH", str(demo_db))
+    monkeypatch.setenv("GIM_LLM_PROVIDER", "none")
+    get_settings.cache_clear()
+    try:
+        at = AppTest.from_string(_page_script("reports"), default_timeout=60)
+        at.session_state["report_prefill"] = {"type": "country_profile", "country": "Sudan", "days": 30}
+        at.run()
+        assert not at.exception, [e.value for e in at.exception]
+        assert at.tabs[0].label == "Generate new report"
+        assert at.selectbox[0].value == "country_profile"
+    finally:
+        get_settings.cache_clear()

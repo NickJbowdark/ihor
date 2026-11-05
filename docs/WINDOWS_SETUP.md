@@ -91,7 +91,7 @@ At minimum, set `GIM_USER_AGENT` (your contact URL). The AI section is covered i
 python -m pytest
 ```
 
-Expected: all tests pass (`111 passed, 1 skipped`; the skipped test waits for real recorded responses).
+Expected: all tests pass (`121 passed, 1 skipped`; the skipped test waits for real recorded responses).
 
 ## 6. See the complete application immediately (demo, synthetic data)
 

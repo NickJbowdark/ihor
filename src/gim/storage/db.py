@@ -704,9 +704,9 @@ def query_events(conn: sqlite3.Connection, since: datetime, until: datetime | No
         where.append("e.first_published_at <= ?")
         params.append(to_iso(until))
     member_filter = []
-    if regions:
-        member_filter.append(f"d.id IN (SELECT document_id FROM document_regions WHERE region IN ({','.join('?' * len(regions))}))")
-        params.extend(regions)
+    if regions:   # events.regions is the union of member-document regions (schema v4)
+        where.append("(" + " OR ".join("(',' || e.regions || ',') LIKE ?" for _ in regions) + ")")
+        params.extend(f"%,{r},%" for r in regions)
     if data_origins:
         member_filter.append(f"d.data_origin IN ({','.join('?' * len(data_origins))})")
         params.extend(data_origins)

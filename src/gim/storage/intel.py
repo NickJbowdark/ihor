@@ -281,3 +281,16 @@ def set_report_status(conn: sqlite3.Connection, report_id: int, status: str, not
 def window(days: float, now: datetime | None = None) -> tuple[datetime, datetime]:
     now = now or datetime.now(timezone.utc)
     return now - timedelta(days=days), now
+
+
+def activity(conn: sqlite3.Connection, since: datetime, hourly: bool = False) -> list[dict[str, Any]]:
+    """Documents per period and PRIMARY topic, aggregated in SQL (no full-row loading)."""
+    width = 13 if hourly else 10
+    rows = conn.execute(
+        f"""SELECT substr(timeline_at, 1, {width}) AS period,
+                   CASE WHEN categories = '' THEN 'unclassified'
+                        WHEN instr(categories, ',') > 0 THEN substr(categories, 1, instr(categories, ',') - 1)
+                        ELSE categories END AS topic,
+                   COUNT(*) AS documents
+            FROM documents WHERE timeline_at >= ? GROUP BY period, topic ORDER BY period""", (to_iso(since),))
+    return [dict(r) for r in rows]

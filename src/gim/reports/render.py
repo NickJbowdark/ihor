@@ -22,6 +22,8 @@ SECTION_TITLES = {
     "key_developments": "Key developments", "actors": "Actors and documented positions",
     "background": "Background", "source_comparison": "Source comparison",
 }
+LEVEL_SHORT = {"multiple_origins": "multiple origins", "official_plus_reporting": "official + 1 origin",
+               "official_only": "official only", "single_origin": "single origin"}
 DOC_TYPE_LABEL = {"original_reporting": "original reporting", "syndicated": "syndicated copy",
                   "official_statement": "official statement", "dataset_record": "dataset record",
                   "analysis_opinion": "analysis/opinion", "unknown": "origin unknown"}
@@ -86,9 +88,22 @@ def build_blocks(content: dict) -> list[Block]:
         b.append(Block("banner", "No AI analysis was used: attributed source statements and statistics only."))
 
     synth = content.get("synthesis", [])
+    shown: set[int] = set()
+
+    # Key judgments: the analytic bottom line (assessments with confidence), strongest first.
+    order = {"high": 0, "moderate": 1, "low": 2}
+    judgments = [(i, c) for i, c in enumerate(synth) if c.get("claim_type") == "ASSESSMENT"
+                 and c.get("section") in ("executive_summary", "implications", "trends")]
+    judgments.sort(key=lambda ic: (order.get(ic[1].get("confidence") or "", 3), ic[0]))
+    if judgments:
+        b.append(Block("h1", "Key judgments"))
+        for i, c in judgments[:6]:
+            shown.add(i)
+            label, sentence = claim_text(c, cites)
+            b.append(Block("claim", sentence, {"label": label, "type": c["claim_type"]}))
 
     def section(name: str, level: str = "h1") -> None:
-        claims = [c for c in synth if c.get("section") == name]
+        claims = [c for i, c in enumerate(synth) if c.get("section") == name and i not in shown]
         if not claims:
             return
         b.append(Block(level, SECTION_TITLES.get(name, name)))
@@ -99,6 +114,19 @@ def build_blocks(content: dict) -> list[Block]:
     section("executive_summary")
     section("regional_overview")
     section("trends")
+
+    if content["events"]:
+        b.append(Block("h1", "Events covered"))
+        b.append(Block("table", data={"headers": ["Event", "First reported (UTC)", "Headline", "Docs", "Sources"],
+                                      "widths": (12, 18, 46, 7, 17), "rows": [
+            [e["ref"], e["first_published_at"][:16].replace("T", " "), e["headline"][:110], e["documents_count"],
+             LEVEL_SHORT.get(e.get("corroboration_level", ""), e["corroboration"][:40])] for e in content["events"]]}))
+    if content.get("changes"):
+        b.append(Block("h1", "Changes compared with the previous period"))
+        b.append(Block("note", "Deterministic counts of events in the same scope; volume reflects attention, "
+                               "not severity."))
+        b.append(Block("table", data={"headers": ["Measure", "This period", "Previous", "Change"],
+                                      "widths": (55, 15, 15, 15), "rows": content["changes"]}))
 
     b.append(Block("h1", "Event assessments"))
     for e in content["events"]:
@@ -140,6 +168,18 @@ def build_blocks(content: dict) -> list[Block]:
         ["Organisations mentioned", ", ".join(f"{k} ({v})" for k, v in st["organizations"]) or "—"],
         ["Corroboration levels", ", ".join(f"{k} ({v})" for k, v in st["corroboration_levels"]) or "—"],
     ]}))
+
+    sb = content.get("source_base")
+    if sb:
+        b.append(Block("h1", "Source base"))
+        b.append(Block("bullet", f"{sb['documents']} documents from {sb['publishers']} publishers; languages: "
+                                 f"{', '.join(sb['languages']) or 'unknown'}."))
+        b.append(Block("bullet", "Document types: " + ", ".join(f"{DOC_TYPE_LABEL.get(k, k)} {v}"
+                                                                for k, v in sb["doc_types"])))
+        if sb["official_institutions"]:
+            b.append(Block("bullet", "Official statements by: " + ", ".join(f"{k} ({v})"
+                                                                           for k, v in sb["official_institutions"])))
+        b.append(Block("bullet", "Collected via: " + ", ".join(f"{k} ({v})" for k, v in sb["collection_sources"])))
 
     b.append(Block("h1", "Confidence and limitations"))
     for line in content["limitations"]:

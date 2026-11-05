@@ -38,8 +38,8 @@ class Analyst(Protocol):
 
     def analyse_event(self, request: AnalysisRequest) -> AnalysisResult: ...
 
-    def synthesise(self, request: AnalysisRequest, spec_text: str,
-                   event_claims: dict[str, list[dict]]) -> AnalysisResult: ...
+    def synthesise(self, request: AnalysisRequest, spec_text: str, event_claims: dict[str, list[dict]],
+                   trends: list[str] | None = None) -> AnalysisResult: ...
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ class BaselineAnalyst:
                               open_questions=["No AI provider configured: significance, background, implications "
                                               "and source comparison require analyst judgement."])
 
-    def synthesise(self, request, spec_text, event_claims) -> AnalysisResult:
+    def synthesise(self, request, spec_text, event_claims, trends: list[str] | None = None) -> AnalysisResult:
         claims = []
         for ev in request.events[:6]:
             if ev.documents:
@@ -108,12 +108,19 @@ class LLMAnalyst:
         if rejected:
             problems = [f"claim '{r['claim']['text'][:80]}': {'; '.join(r['problems'])}" for r in rejected]
             log.info("Validator rejected %d claim(s); asking for one repair", len(rejected))
-            repaired = self.client.chat_json(
-                messages + [{"role": "assistant", "content": json.dumps(data, ensure_ascii=False)[:20000]},
-                            prompts.repair_message(problems)], purpose + ":repair")
-            claims = [Claim.from_dict(c) for c in repaired.get("claims", []) if isinstance(c, dict)]
-            accepted, rejected = split_valid(request, claims)
-            data = repaired
+            try:
+                repaired = self.client.chat_json(
+                    messages + [{"role": "assistant", "content": json.dumps(data, ensure_ascii=False)[:20000]},
+                                prompts.repair_message(problems)], purpose + ":repair")
+            except LLMError as exc:
+                # The first answer's VALID claims are still usable; never lose them to a failed repair.
+                log.warning("Repair round failed (%s); keeping the validated first answer", exc)
+                repaired = None
+            if repaired is not None:
+                claims2 = [Claim.from_dict(c) for c in repaired.get("claims", []) if isinstance(c, dict)]
+                accepted2, rejected2 = split_valid(request, claims2)
+                if len(accepted2) >= len(accepted):   # a "repair" that loses support is not an improvement
+                    accepted, rejected, data = accepted2, rejected2, repaired
         questions = [str(q)[:500] for q in (data.get("open_questions") or []) if q][:10]
         return AnalysisResult(request.request_id, self.name, self.model, accepted, questions,
                               rejected=rejected, title=str(data.get("title") or "")[:200])
@@ -124,8 +131,9 @@ class LLMAnalyst:
             c.event_ref = c.event_ref or request.events[0].ref
         return result
 
-    def synthesise(self, request, spec_text, event_claims) -> AnalysisResult:
-        return self._run(request, prompts.report_messages(request, spec_text, event_claims), "report_synthesis")
+    def synthesise(self, request, spec_text, event_claims, trends: list[str] | None = None) -> AnalysisResult:
+        return self._run(request, prompts.report_messages(request, spec_text, event_claims, trends),
+                         "report_synthesis")
 
 
 def get_analyst(conn, prefer_ai: bool = True) -> tuple[Analyst, list[str]]:
@@ -172,6 +180,9 @@ def analyse_event(conn, event_id: int, analyst: Analyst, *, use_cache: bool = Tr
         "evidence_refs": [d.ref for d in bundle.documents] + [d.ref for a in archive for d in a.documents],
         "data_origin": event.get("data_origin", "live"),
     }
-    intel.save_event_analysis(conn, event_id=event_id, cache_key=key, provider=analyst.name, model=analyst.model,
-                              prompt_version=prompts.PROMPT_VERSION, content=content, rejected=result.rejected)
+    if result.claims or analyst.name == "baseline":
+        # An AI answer with zero valid claims is not cached: a later run may do better.
+        intel.save_event_analysis(conn, event_id=event_id, cache_key=key, provider=analyst.name,
+                                  model=analyst.model, prompt_version=prompts.PROMPT_VERSION, content=content,
+                                  rejected=result.rejected)
     return {**content, "cached": False, "rejected": result.rejected}

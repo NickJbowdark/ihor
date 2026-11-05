@@ -123,7 +123,8 @@ def render_pdf(content: dict) -> bytes:
         elif k == "table":
             pdf.set_font("DejaVu", "", 8)
             pdf.set_text_color(20, 20, 20)
-            with pdf.table(col_widths=(35, 65), line_height=4.6, headings_style=FontFace(emphasis="BOLD", fill_color=LIGHT),
+            widths = blk.data.get("widths") or tuple([100 // len(blk.data["headers"])] * len(blk.data["headers"]))
+            with pdf.table(col_widths=widths, line_height=4.6, text_align="LEFT", headings_style=FontFace(emphasis="BOLD", fill_color=LIGHT),
                            first_row_as_headings=True,
                            borders_layout="HORIZONTAL_LINES") as table:
                 table.row([str(h) for h in blk.data["headers"]])

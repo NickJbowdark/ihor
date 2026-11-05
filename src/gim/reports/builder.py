@@ -15,7 +15,8 @@ from datetime import datetime, timedelta, timezone
 from gim.analysis import prompts
 from gim.analysis.bundle import build_event_bundles
 from gim.analysis.contracts import AnalysisRequest
-from gim.analysis.engine import Analyst, analyse_event
+from gim.analysis.engine import Analyst, BaselineAnalyst, analyse_event
+from gim.analysis.llm import BudgetExceeded, LLMError
 from gim.analysis.retrieval import related_history
 from gim.regions import REGIONS
 from gim.reports.render import render_markdown
@@ -40,25 +41,72 @@ class ReportError(ValueError):
     pass
 
 
-def select_events(conn, spec, *, since, until, regions, countries, topic, live_only) -> list[dict]:
+def select_events(conn, spec, *, since, until, regions, countries, topic, live_only, limit: int | None = None) -> list[dict]:
     origins = ["live"] if live_only else None
+    limit = limit or spec.max_events
     if spec.needs == "topic" or topic:
         if not topic:
             raise ReportError("this report type needs a topic (keywords)")
-        hits = intel.search_events(conn, topic, after=since, limit=spec.max_events * 3, data_origins=origins)
+        hits = intel.search_events(conn, topic, after=since, limit=limit * 3, data_origins=origins)
         hits = [h for h in hits if h["first_published_at"] <= db.to_iso(until)]
         if regions:
             hits = [h for h in hits if set((h["regions"] or "").split(",")) & set(regions)]
         if countries:
             hits = [h for h in hits if set((h["countries_mentioned"] or "").split(",")) & set(countries)]
-        return sorted(hits, key=lambda h: -h["prominence"])[: spec.max_events]
+        return sorted(hits, key=lambda h: -h["prominence"])[:limit]
     if spec.needs == "country" and not countries:
         raise ReportError("this report type needs a country")
     if spec.needs == "region" and not regions:
         raise ReportError("this report type needs a region")
     return db.query_events(conn, since, until, regions=regions or None, countries=countries or None,
                            categories=list(spec.categories) or None, data_origins=origins,
-                           order="prominence", limit=spec.max_events)
+                           order="prominence", limit=limit)
+
+
+def _changes(conn, spec, *, since, until, regions, countries, topic, live_only) -> dict:
+    """Deterministic change data: this period vs the previous period of equal length, same scope."""
+    span = until - since
+    kw = dict(regions=regions, countries=countries, topic=topic, live_only=live_only, limit=2000)
+    try:
+        now_ev = select_events(conn, spec, since=since, until=until, **kw)
+        prev_ev = select_events(conn, spec, since=since - span, until=since, **kw)
+    except ReportError:
+        return {"rows": [], "lines": []}
+    prev_ev = [e for e in prev_ev if e["first_published_at"] < db.to_iso(since)]
+
+    def count(evts, key):
+        return Counter(x for e in evts for x in (e[key] or "").split(",") if x)
+
+    rows, lines = [], []
+    n, p = len(now_ev), len(prev_ev)
+    rows.append(["Events in scope", n, p, _pct(n, p)])
+    lines.append(f"Events in scope: {n} this period vs {p} in the previous period ({_pct(n, p)}).")
+    for label, key, top in (("Topic", "categories", 6), ("Country mentioned", "countries_mentioned", 8)):
+        c_now, c_prev = count(now_ev, key), count(prev_ev, key)
+        movers = sorted(set(c_now) | set(c_prev), key=lambda k: -(abs(c_now[k] - c_prev[k]) + c_now[k] / 100))
+        for k in movers[:top]:
+            if k in countries:
+                continue
+            rows.append([f"{label}: {k}", c_now[k], c_prev[k], _pct(c_now[k], c_prev[k])])
+            if c_now[k] != c_prev[k]:
+                lines.append(f"{label} '{k}': {c_now[k]} events vs {c_prev[k]} ({_pct(c_now[k], c_prev[k])}).")
+    return {"rows": rows, "lines": lines[:14]}
+
+
+def _pct(now: int, prev: int) -> str:
+    if prev == 0:
+        return "new" if now else "—"
+    return f"{(now - prev) / prev:+.0%}"
+
+
+def _source_base(bundles) -> dict:
+    docs = [d for b in bundles for d in b.documents]
+    types = Counter(d.doc_type for d in docs)
+    officials = Counter(d.original_reporter or d.publisher for d in docs if d.doc_type == "official_statement")
+    return {"documents": len(docs), "publishers": len({d.publisher for d in docs}),
+            "languages": sorted({d.language for d in docs if d.language}),
+            "doc_types": types.most_common(), "official_institutions": officials.most_common(8),
+            "collection_sources": Counter(s for d in docs for s in d.delivered_by).most_common()}
 
 
 def _statistics(conn, events: list[dict], since, until, countries, regions) -> dict:
@@ -98,14 +146,28 @@ def generate_report(conn, report_type: str, analyst: Analyst, *, regions: list[s
     if not events:
         raise ReportError("no events match this scope and period -- collect data first or widen the period")
 
-    # 1) per-event analyses (cached)
-    analyses, rejected_total = {}, []
+    # 1) per-event analyses (cached). An AI failure never aborts the report: the affected event
+    #    falls back to the deterministic baseline and the report says so.
+    analyses, rejected_total, run_notes = {}, [], []
+    baseline = BaselineAnalyst()
+    active = analyst
     for i, e in enumerate(events, 1):
         if progress:
             progress(i, len(events) + 1, f"Analysing EVT-{e['id']}: {e['headline'][:70]}")
-        a = analyse_event(conn, e["id"], analyst)
+        try:
+            a = analyse_event(conn, e["id"], active)
+        except BudgetExceeded as exc:
+            run_notes.append(f"AI budget cap reached during generation ({exc}); remaining events use the "
+                             "non-AI baseline.")
+            active = baseline
+            a = analyse_event(conn, e["id"], baseline)
+        except LLMError as exc:
+            run_notes.append(f"EVT-{e['id']}: AI analysis failed ({str(exc)[:120]}); baseline used for this event.")
+            a = analyse_event(conn, e["id"], baseline)
         analyses[f"EVT-{e['id']}"] = a
         rejected_total += [{**r, "event_ref": f"EVT-{e['id']}"} for r in a.get("rejected", [])]
+    changes = _changes(conn, spec, since=since, until=until, regions=regions, countries=countries,
+                       topic=topic, live_only=live_only)
 
     # 2) synthesis over all events (+ archive for the scope)
     bundles = build_event_bundles(conn, events)
@@ -121,20 +183,27 @@ def generate_report(conn, report_type: str, analyst: Analyst, *, regions: list[s
         progress(len(events) + 1, len(events) + 1, "Writing synthesis")
     scope_text = ", ".join(filter(None, [", ".join(REGIONS[r].name for r in regions if r in REGIONS),
                                          ", ".join(countries), topic and f"topic: {topic}"])) or "global"
-    synth = analyst.synthesise(request, f"{spec.purpose} Scope: {scope_text}.",
-                               {ref: a["claims"] for ref, a in analyses.items()})
+    try:
+        synth = active.synthesise(request, f"{spec.purpose} Scope: {scope_text}.",
+                                  {ref: a["claims"] for ref, a in analyses.items()}, changes["lines"])
+    except LLMError as exc:   # includes BudgetExceeded
+        run_notes.append(f"AI synthesis failed ({str(exc)[:120]}); summary built by the non-AI baseline.")
+        synth = baseline.synthesise(request, spec.purpose, {}, changes["lines"])
     rejected_total += synth.rejected
+    providers = {a["provider"] for a in analyses.values()} | {synth.provider}
+    report_provider, report_model = ("baseline", "deterministic") if providers == {"baseline"} \
+        else (analyst.name, analyst.model)
 
     origins = {e["data_origin"] for e in events}
     data_origin = origins.pop() if len(origins) == 1 else "mixed"
     title = synth.title or f"{spec.name} — {scope_text}"
     limitations = list(STANDARD_LIMITATIONS)
-    if analyst.name == "baseline":
+    if report_provider == "baseline":
         limitations.insert(0, "NO AI ANALYSIS: no AI provider was configured or available; this report contains "
                               "attributed source statements and statistics only.")
     if data_origin != "live":
         limitations.insert(0, "SYNTHETIC DATA: this report was generated from test fixtures, NOT real intelligence.")
-    limitations += notes or []
+    limitations += (notes or []) + run_notes
     if rejected_total:
         limitations.append(f"{len(rejected_total)} model statement(s) were rejected by the evidence validator "
                            "and are excluded (listed in the appendix).")
@@ -142,20 +211,21 @@ def generate_report(conn, report_type: str, analyst: Analyst, *, regions: list[s
     content = {
         "report_type": report_type, "report_name": spec.name, "title": title, "scope": scope,
         "scope_text": scope_text, "window_start": db.to_iso(since), "window_end": db.to_iso(until),
-        "generated_at": db.utcnow_iso(), "provider": analyst.name, "model": analyst.model,
+        "generated_at": db.utcnow_iso(), "provider": report_provider, "model": report_model,
         "prompt_version": prompts.PROMPT_VERSION, "data_origin": data_origin, "status": "draft",
         "synthesis": [asdict(c) for c in synth.claims], "open_questions": synth.open_questions,
         "events": [_event_entry(e, b, analyses[b.ref]) for e, b in zip(events, bundles)],
         "archive": [{"ref": a.ref, "headline": a.headline, "first_published_at": a.first_published_at}
                     for a in archive],
         "statistics": _statistics(conn, events, since, until, countries, regions),
+        "changes": changes["rows"], "source_base": _source_base(bundles),
         "limitations": limitations, "rejected": rejected_total,
         "documents": _document_index(bundles + archive),
     }
     markdown = render_markdown(content)
     return intel.save_report(conn, report_type=report_type, title=title, scope=scope,
                              window_start=content["window_start"], window_end=content["window_end"],
-                             provider=analyst.name, model=analyst.model, content=content, markdown=markdown,
+                             provider=report_provider, model=report_model, content=content, markdown=markdown,
                              data_origin=data_origin)
 
 
@@ -166,7 +236,7 @@ def _event_entry(e: dict, bundle, analysis: dict) -> dict:
         "last_published_at": e["last_published_at"], "countries_mentioned": e["countries_mentioned"],
         "organizations": e["organizations"], "categories": e["categories"],
         "event_location": e["event_country"] or "unknown", "location_basis": e["location_basis"],
-        "corroboration": corr["label"], "caveats": corr["caveats"], "prominence": e["prominence"],
+        "corroboration": corr["label"], "corroboration_level": corr["level"], "caveats": corr["caveats"], "prominence": e["prominence"],
         "documents_count": e["documents_count"], "claims": analysis["claims"],
         "open_questions": analysis.get("open_questions", []), "archive_refs": analysis.get("archive_refs", []),
         "source_refs": [d.ref for d in bundle.documents],

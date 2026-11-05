@@ -7,7 +7,7 @@ import json
 
 from gim.analysis.contracts import EVENT_SECTIONS, REPORT_SECTIONS, AnalysisRequest, EventBundle
 
-PROMPT_VERSION = "gim-prompts/1.0"
+PROMPT_VERSION = "gim-prompts/1.1"
 MAX_SOURCE_CHARS = 700          # per document summary in the prompt
 MAX_DOCS_PER_EVENT = 10
 MAX_ARCHIVE_DOCS = 2
@@ -91,8 +91,36 @@ def _escape(text: str) -> str:
     return (text or "").replace("<source", "‹source").replace("</source", "‹/source")
 
 
+_TYPE_PRIORITY = {"official_statement": 0, "original_reporting": 1, "analysis_opinion": 2, "dataset_record": 3,
+                  "unknown": 4, "syndicated": 5}
+
+
+def select_documents(bundle: EventBundle, limit: int) -> list:
+    """Evidence selection for the prompt: ONE document per origin first (officials and original
+    reporting preferred), then further documents by time. A large event made of 40 copies of
+    one wire story must not crowd out the 3 independent reports."""
+    docs = {d.ref: d for d in bundle.documents}
+    try:
+        origins = json.loads(bundle.corroboration).get("origins", [])
+    except ValueError:
+        origins = []
+    firsts = []
+    for o in origins:
+        cands = [docs[f"DOC-{i}"] for i in o.get("document_ids", []) if f"DOC-{i}" in docs]
+        if cands:
+            firsts.append(min(cands, key=lambda d: (_TYPE_PRIORITY.get(d.doc_type, 9), d.published_at or "")))
+    firsts.sort(key=lambda d: (_TYPE_PRIORITY.get(d.doc_type, 9), d.published_at or ""))
+    chosen = firsts[:limit]
+    for d in bundle.documents:
+        if len(chosen) >= limit:
+            break
+        if d not in chosen:
+            chosen.append(d)
+    return sorted(chosen, key=lambda d: d.published_at or "")
+
+
 def render_documents(bundle: EventBundle, *, archive: bool = False) -> str:
-    docs = bundle.documents[: (MAX_ARCHIVE_DOCS if archive else MAX_DOCS_PER_EVENT)]
+    docs = select_documents(bundle, MAX_ARCHIVE_DOCS if archive else MAX_DOCS_PER_EVENT)
     out = []
     for d in docs:
         attribution = f'original_reporter="{d.original_reporter}" ' if d.original_reporter else ""
@@ -110,10 +138,16 @@ def render_documents(bundle: EventBundle, *, archive: bool = False) -> str:
 
 def _event_header(ev: EventBundle) -> str:
     corr = json.loads(ev.corroboration)
-    return (f"EVENT {ev.ref}: first reported {ev.first_published_at}, last {ev.last_published_at}\n"
-            f"Countries MENTIONED (not necessarily location): {', '.join(ev.geography.countries_mentioned) or 'none'}\n"
-            f"Event location: {ev.geography.event_country or 'UNKNOWN'} (basis: {ev.geography.location_basis})\n"
-            f"Corroboration: {corr['label']} Caveats: {' '.join(corr['caveats']) or 'none'}")
+    lines = [f"EVENT {ev.ref}: first reported {ev.first_published_at}, last {ev.last_published_at}",
+             f"Countries MENTIONED (not necessarily location): {', '.join(ev.geography.countries_mentioned) or 'none'}",
+             f"Event location: {ev.geography.event_country or 'UNKNOWN'} (basis: {ev.geography.location_basis})",
+             f"Corroboration: {corr['label']} Caveats: {' '.join(corr['caveats']) or 'none'}",
+             "ORIGINS (who actually produced the information; documents of one origin are copies, not confirmations):"]
+    for o in corr.get("origins", [])[:12]:
+        ids = ", ".join(f"DOC-{i}" for i in o["document_ids"][:8])
+        more = f" (+{len(o['document_ids']) - 8} more)" if len(o["document_ids"]) > 8 else ""
+        lines.append(f"- {_escape(o['label'])} [{o['kind']}]: {ids}{more}")
+    return "\n".join(lines)
 
 
 def event_messages(request: AnalysisRequest) -> list[dict[str, str]]:
@@ -128,8 +162,12 @@ def event_messages(request: AnalysisRequest) -> list[dict[str, str]]:
     return [{"role": "system", "content": EVENT_SYSTEM}, {"role": "user", "content": "\n".join(parts)}]
 
 
-def report_messages(request: AnalysisRequest, spec_text: str, event_analyses: dict[str, list[dict]]) -> list[dict[str, str]]:
+def report_messages(request: AnalysisRequest, spec_text: str, event_analyses: dict[str, list[dict]],
+                    trends: list[str] | None = None) -> list[dict[str, str]]:
     parts = [f"REPORT: {spec_text}", f"PERIOD: {request.window_start} to {request.window_end}", ""]
+    if trends:
+        parts += ["CHANGE DATA (deterministic counts from the GIM database; volume = attention, not severity):"]
+        parts += [f"- {t}" for t in trends] + [""]
     for ev in request.events:
         parts.append(_event_header(ev))
         claims = event_analyses.get(ev.ref) or []

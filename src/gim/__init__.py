@@ -1,3 +1,3 @@
 """Global Intelligence Monitor (GIM) - personal geopolitical OSINT platform."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

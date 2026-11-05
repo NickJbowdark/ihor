@@ -74,5 +74,17 @@ def daily(db_path: str, days: float, country: str | None = None, region: str | N
     return pd.DataFrame(rows)
 
 
+@st.cache_data(ttl=TTL, show_spinner=False)
+def activity(db_path: str, days: float) -> pd.DataFrame:
+    c = db.connect(db_path)
+    rows = intel.activity(c, datetime.now(timezone.utc) - timedelta(days=days), hourly=days <= 2)
+    c.close()
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["period"] = pd.to_datetime(df["period"].where(df["period"].str.len() > 10, df["period"] + "T00"),
+                                      format="%Y-%m-%dT%H", utc=True)
+    return df
+
+
 def clear() -> None:
     st.cache_data.clear()
